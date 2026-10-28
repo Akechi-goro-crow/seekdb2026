@@ -359,6 +359,16 @@ int ObSRDaaTIterImpl::filter_on_demand(const int64_t count, const double relevan
   } else if (eval_ctx->is_vectorized()) {
     if (OB_UNLIKELY(count >= eval_ctx->max_batch_size_)) {
       ret = OB_ERR_UNEXPECTED;
+    } else if (T_FUN_MATCH_AGAINST == filter_expr->type_) {
+      // The pushdown filter is the match expression itself: a document passes the
+      // filter exactly when its score is positive, which is already known here, so
+      // the expression does not have to be evaluated again for every document.
+      guard.set_batch_idx(count);
+      ObDatum &relevance_proj_datum = relevance_proj_expr->locate_datum_for_write(*eval_ctx);
+      relevance_proj_datum.set_double(relevance);
+      relevance_proj_expr->get_evaluated_flags(*eval_ctx).set(count);
+      relevance_proj_expr->set_evaluated_projected(*eval_ctx);
+      need_project = relevance > 0;
     } else {
       guard.set_batch_idx(count);
       ObDatum &relevance_proj_datum = relevance_proj_expr->locate_datum_for_write(*eval_ctx);
