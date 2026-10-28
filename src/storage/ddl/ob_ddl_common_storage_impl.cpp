@@ -480,6 +480,12 @@ int oceanbase::storage::ObDDLStorageUtil::get_task_ranges(
     } else if (OB_FALSE_IT(total_size = total_size / 1024 /* Byte -> KB */)) {
     } else if (OB_FAIL(data_plane::ObParallelRangeTaskPlanner::compute_total_task_count(
         params, total_size, expected_task_count))) {
+    } else if (hint_parallelism > 1 && expected_task_count < hint_parallelism) {
+      // An explicit parallelism request is a hard hint: make sure the work is
+      // really split into that many tasks, even if the tablet is small.
+      expected_task_count = hint_parallelism;
+    }
+    if (OB_FAIL(ret)) {
     } else if (OB_FAIL(tablet_service->split_multi_ranges(tablet_id,
                                                           ObTabletCommon::DEFAULT_GET_TABLET_DURATION_US,
                                                           ranges,
