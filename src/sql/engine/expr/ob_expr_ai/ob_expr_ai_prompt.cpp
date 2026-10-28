@@ -111,7 +111,7 @@ int ObExprAIPrompt::eval_ai_prompt(const ObExpr &expr, ObEvalCtx &ctx, ObDatum &
       } else if (ob_is_json(arg->datum_meta_.type_)) {
         ObIJsonBase *j_base = nullptr;
         bool arg_is_null = false;
-        if (OB_FAIL(ObJsonExprHelper::get_json_doc(expr, ctx, tmp_allocator, i, j_base, arg_is_null))) {
+        if (OB_FAIL(ObJsonExprHelper::get_json_doc(expr, ctx, tmp_allocator, static_cast<uint16_t>(i), j_base, arg_is_null))) {
         } else if (OB_ISNULL(j_base) || arg_is_null) {
           ret = OB_ERR_INVALID_TYPE_FOR_OP;
         } else if (OB_FAIL(args_array->append(static_cast<ObJsonNode *>(j_base)))) {
