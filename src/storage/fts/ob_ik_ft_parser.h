@@ -46,7 +46,8 @@ public:
         cache_stop_(allocator),
         dict_main_(nullptr),
         dict_quan_(nullptr),
-        dict_stop_(nullptr)
+        dict_stop_(nullptr),
+        owns_dicts_(true)
   {
   }
 
@@ -73,6 +74,8 @@ private:
 
 private:
   int init_dict(const ObFTParserParam &param);
+
+  int init_cached_dict();
 
   int init_single_dict(ObFTDictDesc desc, ObFTCacheRangeContainer &container);
 
@@ -106,6 +109,9 @@ private:
   ObIFTDict *dict_main_;
   ObIFTDict *dict_quan_;
   ObIFTDict *dict_stop_;
+  // The dictionaries may be borrowed from the per thread cache, in that case they
+  // must not be released by this parser.
+  bool owns_dicts_;
 
   DISABLE_COPY_ASSIGN(ObIKFTParser);
 };
