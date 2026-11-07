@@ -66,6 +66,19 @@ bool same_string(const ObString &a, const ObString &b)
   return a.length() == b.length()
       && (0 == a.length() || 0 == MEMCMP(a.ptr(), b.ptr(), a.length()));
 }
+
+constexpr int64_t TOKENIZE_PROPS_CACHE_SIZE = 4;
+struct TokenizePropsCacheEntry
+{
+  TokenizePropsCacheEntry() : valid_(false) {}
+  common::ObArenaAllocator allocator_;
+  ObString parser_name_;
+  ObString raw_properties_;
+  ObString reformed_properties_;
+  bool valid_;
+};
+thread_local TokenizePropsCacheEntry g_tokenize_props_cache[TOKENIZE_PROPS_CACHE_SIZE];
+thread_local int64_t g_tokenize_props_cache_idx = 0;
 } // anonymous namespace
 
 ObExprTokenize::ObExprTokenize(common::ObIAllocator &alloc)
@@ -464,6 +477,16 @@ int ObExprTokenize::TokenizeParam::reform_parser_properties(const ObString &prop
 {
   int ret = OB_SUCCESS;
   storage::ObFTParserJsonProps parser_properties;
+  const ObString raw_properties = properties;
+
+  for (int64_t i = 0; i < TOKENIZE_PROPS_CACHE_SIZE; ++i) {
+    TokenizePropsCacheEntry &entry = g_tokenize_props_cache[i];
+    if (entry.valid_ && entry.parser_name_ == parser_name_ && entry.raw_properties_ == raw_properties) {
+      if (OB_FAIL(ob_write_string(allocator_, entry.reformed_properties_, properties_))) {
+      }
+      return ret;
+    }
+  }
 
   if (OB_FAIL(parser_properties.init())) {
   } else if (OB_FAIL(parser_properties.parse_from_valid_str(properties))) {
@@ -472,6 +495,16 @@ int ObExprTokenize::TokenizeParam::reform_parser_properties(const ObString &prop
                                                              ObCollationType::CS_TYPE_UTF8MB4_BIN,
                                                              true))) {
   } else if (OB_FAIL(parser_properties.to_format_json(allocator_, properties_))) {
+  } else {
+    TokenizePropsCacheEntry &entry = g_tokenize_props_cache[g_tokenize_props_cache_idx];
+    g_tokenize_props_cache_idx = (g_tokenize_props_cache_idx + 1) % TOKENIZE_PROPS_CACHE_SIZE;
+    entry.allocator_.reset();
+    entry.valid_ = false;
+    if (OB_SUCC(ob_write_string(entry.allocator_, parser_name_, entry.parser_name_))
+        && OB_SUCC(ob_write_string(entry.allocator_, raw_properties, entry.raw_properties_))
+        && OB_SUCC(ob_write_string(entry.allocator_, properties_, entry.reformed_properties_))) {
+      entry.valid_ = true;
+    }
   }
 
   return ret;
