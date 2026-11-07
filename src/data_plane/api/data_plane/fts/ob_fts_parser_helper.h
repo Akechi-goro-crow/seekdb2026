@@ -213,6 +213,10 @@ public:
 
   void reset();
 
+  // Keep parser state in a longer-lived cache while directing per-call
+  // token and JSON allocations to the current statement allocator.
+  void rebind_allocator(common::ObIAllocator *allocator) { allocator_ = allocator; }
+
   TO_STRING_KV(KP_(allocator), K_(parser_name), KP_(parser_desc), K_(is_inited));
 
 private:
