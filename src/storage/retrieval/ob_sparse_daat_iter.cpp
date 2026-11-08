@@ -119,7 +119,8 @@ int ObSRDaaTIterImpl::init(
     // Input scans reuse the projection expression's datum vector. Keep output
     // IDs in separate storage until all input refills for this batch finish.
     value_id_fast_ = enable_integer_buffer
-        && set_datum_func_ == ObISparseRetrievalMergeIter::set_datum_int;
+        && (iter_param_->id_proj_expr_->datum_meta_.type_ == common::ObUInt64Type
+            || iter_param_->id_proj_expr_->datum_meta_.type_ == common::ObIntType);
     if (OB_UNLIKELY(dim_iters.count() == 0)) {
     } else if (OB_NOT_NULL(iter_param_->dim_weights_) && dim_iters.count() != iter_param_->dim_weights_->count()) {
       ret = OB_ERR_UNEXPECTED;
@@ -501,9 +502,11 @@ int ObSRDaaTIterImpl::project_results(const int64_t count)
       set_datum_func_(id_proj_datum, buffered_domain_ids_[0]);
     }
     id_proj_expr->set_evaluated_projected(*eval_ctx);
-    ObDatum &relevance_proj_datum = relevance_proj_expr->locate_datum_for_write(*eval_ctx);
-    relevance_proj_datum.set_double(buffered_relevances_[0]);
-    relevance_proj_expr->set_evaluated_projected(*eval_ctx);
+    if (iter_param_->need_project_relevance()) {
+      ObDatum &relevance_proj_datum = relevance_proj_expr->locate_datum_for_write(*eval_ctx);
+      relevance_proj_datum.set_double(buffered_relevances_[0]);
+      relevance_proj_expr->set_evaluated_projected(*eval_ctx);
+    }
   }
   return ret;
 }

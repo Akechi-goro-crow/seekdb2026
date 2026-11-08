@@ -405,7 +405,8 @@ int ObSRTaaTIterImpl::load_next_hash_map()
           } else if (OB_FAIL(map->set_refactored(id, cur_relevance + last_relevance, 1 /* overwrite */))) {
           }
         } else {
-          if (OB_FAIL(map->set_refactored(id, 1.0, 0 /* overwrite */))) {
+          // Overlapping postings are one hit, not a hash insertion error.
+          if (OB_FAIL(map->set_refactored(id, 1.0, 1 /* overwrite */))) {
           }
         }
       }

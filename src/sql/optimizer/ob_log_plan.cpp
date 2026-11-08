@@ -11987,6 +11987,52 @@ int ObLogPlan::construct_startup_filter_for_limit(ObRawExpr *limit_expr, ObLogic
   return ret;
 }
 
+// A natural-language posting has a positive BM25 contribution. If the only
+// reference to MATCH is its direct boolean WHERE predicate, visiting the
+// posting union is sufficient; neither statistics nor scores are observable.
+// Keep this proof local to ordinary single-table scans, excluding lookup,
+// index merge, boolean queries, score thresholds and implicit relevance sorts.
+static int check_fts_filter_only(const ObDMLStmt &stmt,
+                                 const ObMatchFunRawExpr &match,
+                                 const ObRawExpr &predicate,
+                                 bool &filter_only)
+{
+  int ret = OB_SUCCESS;
+  filter_only = false;
+  if (!stmt.is_select_stmt() || stmt.is_set_stmt() || stmt.get_table_size() != 1
+      || !stmt.get_table_items().at(0)->is_basic_table()
+      || !stmt.get_subquery_exprs().empty() || stmt.get_match_exprs().count() != 1
+      || stmt.get_match_exprs().at(0) != &match || match.is_es_match()
+      || match.get_mode_flag() != NATURAL_LANGUAGE_MODE
+      || !match.get_columns_boosts().empty()
+      || predicate.get_expr_type() != T_OP_BOOL || predicate.get_param_count() != 1
+      || predicate.get_param_expr(0) != &match) {
+    // Retain the scored path when the proof does not apply.
+  } else {
+    ObSEArray<ObRawExpr *, 16> exprs;
+    ObStmtExprGetter visitor;
+    visitor.set_relation_scope();
+    visitor.remove_scope(SCOPE_WHERE);
+    bool referenced = false;
+    bool found_predicate = false;
+    if (OB_FAIL(stmt.get_relation_exprs(exprs, visitor))) {
+    }
+    for (int64_t i = 0; OB_SUCC(ret) && !referenced && i < exprs.count(); ++i) {
+      if (OB_FAIL(ObRawExprUtils::find_expr(exprs.at(i), &match, referenced))) {
+      }
+    }
+    const ObIArray<ObRawExpr *> &conditions = stmt.get_condition_exprs();
+    for (int64_t i = 0; OB_SUCC(ret) && !referenced && i < conditions.count(); ++i) {
+      if (conditions.at(i) == &predicate) {
+        found_predicate = true;
+      } else if (OB_FAIL(ObRawExprUtils::find_expr(conditions.at(i), &match, referenced))) {
+      }
+    }
+    filter_only = OB_SUCC(ret) && found_predicate && !referenced;
+  }
+  return ret;
+}
+
 int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_match_exprs,
                                            const ObIArray<ObRawExpr *> &scan_match_filters,
                                            const ObIArray<ObRawExpr *> &all_match_filters,
@@ -12039,12 +12085,21 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
     ObTextRetrievalInfo &tr_info = table_scan->get_text_retrieval_info();
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
+    bool filter_only = false;
+    if (all_match_filters.count() == 1 && scan_match_filters.count() == 1
+        && OB_FAIL(check_fts_filter_only(*get_stmt(), *match_against, *match_pred, filter_only))) {
+    } else if (filter_only) {
+      tr_info.need_calc_relevance_ = false;
+      // Every row produced by the union has already satisfied this predicate.
+      tr_info.pushdown_match_filter_ = nullptr;
+    }
     // The mapping table is absent when the data-table rowkey is used as the document ID.
     table_scan->set_doc_id_index_table_id(tr_info.doc_id_idx_tid_);
     if (table_scan->is_vec_adaptive_scan() || table_scan->is_vec_idx_scan_post_filter()) {
       table_scan->set_rowkey_doc_table_id(tr_info.rowkey_idx_tid_);
     }
-    if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
+    if (OB_FAIL(ret)) {
+    } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.doc_id_idx_tid_ == OB_INVALID_ID))) {
     } else if (OB_FAIL(table_scan->set_is_skip_rowkey_doc(tr_info.rowkey_idx_tid_ == OB_INVALID_ID))) {
     }
   }

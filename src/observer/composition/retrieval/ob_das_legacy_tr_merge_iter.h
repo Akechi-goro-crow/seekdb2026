@@ -102,6 +102,7 @@ private:
   int create_sparse_retrieval_iter();
   int init_daat_iter_param(ObTextDaaTParam &iter_param);
   int init_taat_iter_param(ObTextTaaTParam &iter_param);
+  int init_bm25_est_ctx(storage::ObBM25ParamEstCtx &est_ctx);
   int set_children_iter_rangekey();
   int gen_inv_idx_scan_default_range(const ObString &query_token, ObNewRange &scan_range);
   int gen_inv_idx_scan_one_range(const ObString &query_token, const ObDocIdExt &doc_id, ObNewRange &scan_range);

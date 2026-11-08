@@ -1,0 +1,112 @@
+# owner: fts
+# tags: fts
+# description: Filter-only natural-language retrieval must preserve the complete
+# hit set and fall back for observable scores, thresholds and boolean queries.
+# Includes signed IDs, empty inputs, prepared statement reuse, DML, generic
+# document IDs and overlapping lists in the >256-token TAAT fallback.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_filter_docs;
+DROP TABLE IF EXISTS fts_filter_scores;
+DROP TABLE IF EXISTS fts_filter_strings;
+DROP TABLE IF EXISTS fts_filter_long;
+DROP TABLE IF EXISTS fts_filter_digits;
+--enable_warnings
+CREATE TABLE fts_filter_docs (id BIGINT PRIMARY KEY, content TEXT);
+INSERT INTO fts_filter_docs VALUES
+(-8,'quasar quasar'),(-1,'nebula'),(0,'quasar nebula'),(2,'quasar asteroid'),
+(3,'galaxy'),(7,''),(11,NULL),(15,'nebula quasar quasar');
+ALTER TABLE fts_filter_docs ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+
+--echo signed_document_ids
+SELECT id FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula') ORDER BY id;
+
+--echo dedup_and_additional_filter
+SELECT COUNT(*) AS hits FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar quasar nebula') AND id >= 0;
+
+--echo grouped_filter
+SELECT MOD(ABS(id),2) AS parity, COUNT(*) AS hits FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula') GROUP BY parity ORDER BY parity;
+
+--echo ordered_limit_offset
+SELECT id FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula') ORDER BY id LIMIT 2 OFFSET 1;
+
+--echo scores_are_not_hit_markers
+SELECT COUNT(DISTINCT MATCH(content) AGAINST('quasar nebula')) > 1 AS varied_scores FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula');
+
+CREATE TABLE fts_filter_scores AS SELECT id, MATCH(content) AGAINST('quasar nebula') AS score FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula');
+SET @fts_threshold=(SELECT MAX(score)/2 FROM fts_filter_scores);
+
+--echo score_threshold
+SELECT (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_filter_docs
+WHERE MATCH(content) AGAINST('quasar nebula') > @fts_threshold)
+<=> (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_filter_scores WHERE score > @fts_threshold) AS same_ids;
+
+--echo score_after_filter_query
+SELECT COUNT(*) AS hits FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula');
+SELECT SUM(ABS(MATCH(d.content) AGAINST('quasar nebula') - s.score)) = 0 AS same_scores
+FROM fts_filter_docs d JOIN fts_filter_scores s ON d.id=s.id;
+
+--echo ranked_topk
+SELECT (SELECT GROUP_CONCAT(id ORDER BY id) FROM
+(SELECT id FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula')
+ORDER BY MATCH(content) AGAINST('quasar nebula') DESC, id LIMIT 3) ranked)
+<=> (SELECT GROUP_CONCAT(id ORDER BY id) FROM
+(SELECT id FROM fts_filter_scores ORDER BY score DESC, id LIMIT 3) expected) AS same_ids;
+
+--echo boolean_queries
+SELECT id FROM fts_filter_docs WHERE MATCH(content) AGAINST('+quasar +nebula' IN BOOLEAN MODE) ORDER BY id;
+SELECT id FROM fts_filter_docs WHERE MATCH(content) AGAINST('+quasar -nebula' IN BOOLEAN MODE) ORDER BY id;
+
+--echo empty_and_null_queries
+SELECT COUNT(*) AS hits FROM fts_filter_docs WHERE MATCH(content) AGAINST('');
+SELECT COUNT(*) AS hits FROM fts_filter_docs WHERE MATCH(content) AGAINST(NULL);
+SELECT COUNT(*) AS hits FROM fts_filter_docs WHERE MATCH(content) AGAINST('missingword');
+
+PREPARE fts_filter_stmt FROM 'SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_filter_docs WHERE MATCH(content) AGAINST(?)';
+
+--echo prepared_statement_reuse
+SET @fts_query='quasar';
+EXECUTE fts_filter_stmt USING @fts_query;
+SET @fts_query='nebula';
+EXECUTE fts_filter_stmt USING @fts_query;
+SET @fts_query='';
+EXECUTE fts_filter_stmt USING @fts_query;
+SET @fts_query='quasar';
+EXECUTE fts_filter_stmt USING @fts_query;
+DEALLOCATE PREPARE fts_filter_stmt;
+
+CREATE TABLE fts_filter_strings (id VARCHAR(20) PRIMARY KEY, content TEXT);
+INSERT INTO fts_filter_strings SELECT CAST(id AS CHAR), content FROM fts_filter_docs;
+ALTER TABLE fts_filter_strings ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+
+--echo generic_document_ids
+SELECT id FROM fts_filter_strings WHERE MATCH(content) AGAINST('quasar nebula') ORDER BY id;
+
+UPDATE fts_filter_docs SET content='galaxy' WHERE id=-8;
+DELETE FROM fts_filter_docs WHERE id=0;
+INSERT INTO fts_filter_docs VALUES (20,'quasar nebula');
+
+--echo after_dml
+SELECT id FROM fts_filter_docs WHERE MATCH(content) AGAINST('quasar nebula') ORDER BY id;
+
+CREATE TABLE fts_filter_digits (n INT PRIMARY KEY);
+INSERT INTO fts_filter_digits VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+SET @fts_old_group_concat_max_len=@@group_concat_max_len;
+SET SESSION group_concat_max_len=100000;
+SELECT GROUP_CONCAT(CONCAT('probe',CHAR(97+FLOOR(n/26)),CHAR(97+MOD(n,26)),'xx') ORDER BY n SEPARATOR ' ')
+INTO @fts_long_query FROM
+(SELECT a.n+10*b.n+100*c.n AS n FROM fts_filter_digits a, fts_filter_digits b, fts_filter_digits c) numbers WHERE n<400;
+CREATE TABLE fts_filter_long (id BIGINT PRIMARY KEY, content TEXT);
+INSERT INTO fts_filter_long VALUES (1,@fts_long_query),(2,'probeaaxx probeabxx'),(3,'galaxy');
+ALTER TABLE fts_filter_long ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+
+--echo taat_overlap_and_rescan
+SELECT id FROM fts_filter_long WHERE MATCH(content) AGAINST(@fts_long_query) ORDER BY id;
+PREPARE fts_long_stmt FROM 'SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_filter_long WHERE MATCH(content) AGAINST(?)';
+EXECUTE fts_long_stmt USING @fts_long_query;
+EXECUTE fts_long_stmt USING @fts_long_query;
+DEALLOCATE PREPARE fts_long_stmt;
+
+SET SESSION group_concat_max_len=@fts_old_group_concat_max_len;
+DROP TABLE fts_filter_docs, fts_filter_scores, fts_filter_strings, fts_filter_long, fts_filter_digits;
+--enable_query_log
