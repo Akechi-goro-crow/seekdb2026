@@ -174,6 +174,19 @@ The build is therefore driven by the tokenizer and by the index write path,
 which is why the dictionary and the per-character work dominate the
 optimizations above.
 
+### 2.11 Reuse the per-document word map capacity
+
+File: `src/sql/das/ob_das_domain_utils.cpp`
+
+The index builder already retained a word map and datum-row pool across rows,
+but it destroyed and recreated the hash map whenever two adjacent documents
+had different estimated bucket counts.  That made document length variation
+turn the reuse path back into a per-document allocation path.  The map now
+uses `ObHashMap::reuse()`, which clears entries while retaining the bucket
+array and node allocator.  The hash table can still grow normally when a
+larger document needs more capacity, and the generated row order remains
+stable for a fixed map geometry.
+
 ## 3. Expected effect per benchmark category
 
 | Change | Build | Tokenize | Query |
@@ -183,6 +196,7 @@ optimizations above.
 | UTF8MB4 classification | yes | yes | yes |
 | Binary range search | yes | yes | yes |
 | BENG bulk buffer | BENG build | BENG tokenize | - |
+| Retain word-map capacity | IK/BENG build | - | - |
 | Runtime MATCH filter skip | - | - | yes |
 | Decode the character once | yes | yes | - |
 | Inline utf8mb4 character length | yes | yes | - |
@@ -365,6 +379,8 @@ src/storage/fts/ob_beng_ft_parser.cpp
 src/storage/fts/ob_beng_ft_parser.h
 src/storage/fts/ob_fts_stop_word.cpp
 src/storage/fts/ob_fts_stop_word.h
+src/share/text_analysis/ob_token_stream.cpp
+src/sql/das/ob_das_domain_utils.cpp
 src/observer/composition/retrieval/ob_das_legacy_tr_merge_iter.cpp
 ```
 
