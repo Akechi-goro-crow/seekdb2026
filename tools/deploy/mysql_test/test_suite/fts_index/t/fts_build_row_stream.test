@@ -1,0 +1,92 @@
+# owner: fts
+# tags: fts
+# description: Compare every hit and observable score from indexes built after
+# loading data with the unchanged DML materialization path. Different word
+# counts/document lengths, empty documents, long text, both parsers and ID types
+# expose accidental reuse of token or document metadata in the DDL row cache.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_stream_bulk;
+DROP TABLE IF EXISTS fts_stream_dml;
+DROP TABLE IF EXISTS fts_stream_ik_bulk;
+DROP TABLE IF EXISTS fts_stream_ik_dml;
+--enable_warnings
+
+CREATE TABLE fts_stream_bulk (id BIGINT PRIMARY KEY, title VARCHAR(128), body TEXT);
+INSERT INTO fts_stream_bulk VALUES
+(-9,'quasar','quasar quasar nebula'),
+(-2,'',''),
+(0,NULL,NULL),
+(1,'nebula','quasar nebula nebula nebula'),
+(2,'galaxy','asteroid comet planet star moon sun orbit telescope'),
+(3,'quasar',REPEAT('quasar nebula ',2500)),
+(4,'','quasar'),
+(5,NULL,'nebula'),
+(6,'quasar','alpha beta gamma delta epsilon zeta eta theta iota kappa lambda mu nu xi omicron pi rho sigma tau upsilon phi chi psi omega red green blue yellow orange purple white black silver gold copper iron zinc neon argon xenon'),
+(7,'',''),
+(8,'nebula','quasar quasar quasar quasar quasar');
+CREATE TABLE fts_stream_dml LIKE fts_stream_bulk;
+ALTER TABLE fts_stream_dml ADD FULLTEXT INDEX ft(title,body) WITH PARSER beng;
+INSERT INTO fts_stream_dml SELECT * FROM fts_stream_bulk;
+ALTER TABLE fts_stream_bulk ADD FULLTEXT INDEX ft(title,body) WITH PARSER beng;
+
+--echo beng_complete_hits
+SELECT id FROM fts_stream_bulk WHERE MATCH(title,body) AGAINST('quasar nebula') ORDER BY id;
+--echo beng_bulk_dml_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_bulk WHERE MATCH(title,body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_dml WHERE MATCH(title,body) AGAINST('quasar nebula')) b ON a.id=b.id;
+--echo beng_dml_complete_hits
+SELECT id FROM fts_stream_dml WHERE MATCH(title,body) AGAINST('quasar nebula') ORDER BY id;
+
+# Force a second DDL cache lifetime and retain the score/ID comparison after DML.
+UPDATE fts_stream_bulk SET body='nebula nebula' WHERE id=-9;
+UPDATE fts_stream_dml SET body='nebula nebula' WHERE id=-9;
+DELETE FROM fts_stream_bulk WHERE id=5;
+DELETE FROM fts_stream_dml WHERE id=5;
+INSERT INTO fts_stream_bulk VALUES (9,'quasar','nebula quasar nebula');
+INSERT INTO fts_stream_dml VALUES (9,'quasar','nebula quasar nebula');
+ALTER TABLE fts_stream_bulk DROP INDEX ft;
+ALTER TABLE fts_stream_bulk ADD FULLTEXT INDEX ft(title,body) WITH PARSER beng;
+--echo rebuilt_beng_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_bulk WHERE MATCH(title,body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_dml WHERE MATCH(title,body) AGAINST('quasar nebula')) b ON a.id=b.id;
+--echo rebuilt_beng_complete_hits
+SELECT id FROM fts_stream_bulk WHERE MATCH(title,body) AGAINST('quasar nebula') ORDER BY id;
+
+CREATE TABLE fts_stream_ik_bulk (id VARCHAR(20) PRIMARY KEY, body TEXT);
+INSERT INTO fts_stream_ik_bulk VALUES
+('a','quasar 数据库 数据库 全文 索引'),
+('b',''),('c',NULL),
+('d','nebula 数据库 全文 全文 全文'),
+('e','quasar nebula 数据库'),
+('f',REPEAT('quasar 全文 索引 ',2000)),
+('g','quasar'),('h',''),('i','nebula');
+CREATE TABLE fts_stream_ik_dml LIKE fts_stream_ik_bulk;
+ALTER TABLE fts_stream_ik_dml ADD FULLTEXT INDEX ft(body) WITH PARSER ik;
+INSERT INTO fts_stream_ik_dml SELECT * FROM fts_stream_ik_bulk;
+ALTER TABLE fts_stream_ik_bulk ADD FULLTEXT INDEX ft(body) WITH PARSER ik;
+--echo ik_complete_hits
+SELECT id FROM fts_stream_ik_bulk WHERE MATCH(body) AGAINST('quasar nebula') ORDER BY id;
+--echo ik_dml_complete_hits
+SELECT id FROM fts_stream_ik_dml WHERE MATCH(body) AGAINST('quasar nebula') ORDER BY id;
+--echo ik_bulk_dml_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_ik_bulk WHERE MATCH(body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_ik_dml WHERE MATCH(body) AGAINST('quasar nebula')) b ON a.id=b.id;
+--echo ik_chinese_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(body) AGAINST('数据库 全文') AS score
+      FROM fts_stream_ik_bulk WHERE MATCH(body) AGAINST('数据库 全文')) a
+JOIN (SELECT id, MATCH(body) AGAINST('数据库 全文') AS score
+      FROM fts_stream_ik_dml WHERE MATCH(body) AGAINST('数据库 全文')) b ON a.id=b.id;
+
+DROP TABLE fts_stream_bulk, fts_stream_dml, fts_stream_ik_bulk, fts_stream_ik_dml;
+--enable_query_log

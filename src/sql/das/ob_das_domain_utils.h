@@ -20,6 +20,7 @@
 #include "lib/allocator/page_arena.h"
 #include "lib/hash/ob_hashset.h"
 #include "common/datum/ob_datum.h"
+#include "data_plane/blocksstable/ob_datum_row.h"
 #include "sql/das/ob_das_dml_ctx_define.h"
 #include "data_plane/fts/ob_fts_parser_helper.h"
 #include "data_plane/fts/ob_fts_doc_word_scan.h"
@@ -75,19 +76,23 @@ public:
       const common::ObString &parser_name,
       const common::ObString &parser_properties);
   int segment(const common::ObObjMeta &ft_obj_meta, const ObDatum &doc_id, const common::ObString &fulltext);
+  // The returned row is reused by the next get_next_row()/segment() call.
+  // Its sole consumer, ObTableScanOp, projects it before advancing this cache.
   int get_next_row(blocksstable::ObDatumRow *&row);
   void reset();
   void reuse();
   TO_STRING_KV(K_(row_idx), K_(is_fts_index_aux), K_(helper), K_(is_inited),
-               "row_count", rows_.count());
+               K_(row_count));
 private:
   lib::MemoryContext merge_memctx_;
-  ObDomainIndexRow rows_;
+  blocksstable::ObDatumRow row_;
+  storage::ObFTWordMap word_map_;
+  storage::ObFTWordMap::const_iterator word_iter_;
   uint64_t row_idx_;
+  uint64_t row_count_;
   bool is_fts_index_aux_;
   storage::ObFTParseHelper helper_;
   bool is_inited_;
-  ObFTWordRowsReuseCtx reuse_ctx_;
 
   DISALLOW_COPY_AND_ASSIGN(ObFTIndexRowCache);
 };
