@@ -1,0 +1,28 @@
+# owner: fts
+# tags: fts
+# description: A long document may release many scratch pages. Later short
+# inputs must not observe stale tokens, modes, or strings in the retained page.
+# Alternating input/parser bypasses the single-entry TOKENIZE result cache.
+
+--disable_query_log
+SET @ik_smart_props = '[{"additional_args":[{"ik_mode":"smart"}]}]';
+SET @ik_max_props = '[{"additional_args":[{"ik_mode":"max_word"}]}]';
+SET @ik_smart = CAST(TOKENIZE('中华人民共和国数据库', 'ik', @ik_smart_props) AS CHAR);
+SET @ik_max = CAST(TOKENIZE('中华人民共和国数据库', 'ik', @ik_max_props) AS CHAR);
+SET @beng = CAST(TOKENIZE('Database performance audit', 'beng') AS CHAR);
+let $round = 4;
+while ($round)
+{
+  SET @scratch = TOKENIZE(REPEAT('中华人民共和国数据库索引 123-456 ', 2048), 'ik', @ik_max_props);
+  SET @short_smart = CAST(TOKENIZE('中华人民共和国数据库', 'ik', @ik_smart_props) AS CHAR);
+  SET @scratch = TOKENIZE(REPEAT('Database performance audit ocean ', 2048), 'beng');
+  SET @short_beng = CAST(TOKENIZE('Database performance audit', 'beng') AS CHAR);
+  SET @short_max = CAST(TOKENIZE('中华人民共和国数据库', 'ik', @ik_max_props) AS CHAR);
+  --enable_query_log
+SELECT HEX(@short_smart) = HEX(@ik_smart) AS ik_smart_stable,
+HEX(@short_max) = HEX(@ik_max) AS ik_max_stable,
+HEX(@short_beng) = HEX(@beng) AS beng_stable;
+  --disable_query_log
+  dec $round;
+}
+--enable_query_log

@@ -1,0 +1,20 @@
+SELECT HEX(@short_smart) = HEX(@ik_smart) AS ik_smart_stable,
+HEX(@short_max) = HEX(@ik_max) AS ik_max_stable,
+HEX(@short_beng) = HEX(@beng) AS beng_stable;
+ik_smart_stable	ik_max_stable	beng_stable
+1	1	1
+SELECT HEX(@short_smart) = HEX(@ik_smart) AS ik_smart_stable,
+HEX(@short_max) = HEX(@ik_max) AS ik_max_stable,
+HEX(@short_beng) = HEX(@beng) AS beng_stable;
+ik_smart_stable	ik_max_stable	beng_stable
+1	1	1
+SELECT HEX(@short_smart) = HEX(@ik_smart) AS ik_smart_stable,
+HEX(@short_max) = HEX(@ik_max) AS ik_max_stable,
+HEX(@short_beng) = HEX(@beng) AS beng_stable;
+ik_smart_stable	ik_max_stable	beng_stable
+1	1	1
+SELECT HEX(@short_smart) = HEX(@ik_smart) AS ik_smart_stable,
+HEX(@short_max) = HEX(@ik_max) AS ik_max_stable,
+HEX(@short_beng) = HEX(@beng) AS beng_stable;
+ik_smart_stable	ik_max_stable	beng_stable
+1	1	1
