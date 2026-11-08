@@ -1,0 +1,73 @@
+# owner: fts
+# tags: fts
+# description: Score-free posting-list union preserves complete result sets,
+# overlap, exhaustion and the generic four-term fallback. Explicit primary
+# keys use generated binary document IDs; a heap table uses integer IDs.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_small_signed;
+DROP TABLE IF EXISTS fts_small_unsigned;
+DROP TABLE IF EXISTS fts_small_heap;
+--enable_warnings
+CREATE TABLE fts_small_signed (id BIGINT PRIMARY KEY, content TEXT) ORGANIZATION INDEX;
+INSERT INTO fts_small_signed VALUES
+(-9223372036854775808,'quasar'),(-7,'nebula'),(-1,'quasar nebula'),
+(0,'pulsar'),(2,'quasar pulsar'),(5,'comet'),(7,NULL),
+(9223372036854775807,'quasar nebula pulsar');
+ALTER TABLE fts_small_signed ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+
+--echo one_posting_list
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_signed
+WHERE MATCH(content) AGAINST('quasar');
+--echo two_overlapping_posting_lists
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_signed
+WHERE MATCH(content) AGAINST('quasar nebula');
+--echo three_overlapping_posting_lists
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_signed
+WHERE MATCH(content) AGAINST('quasar nebula pulsar');
+--echo empty_and_exhausted_lists
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_signed
+WHERE MATCH(content) AGAINST('nonexistentword quasar absentword');
+SELECT COUNT(*) AS hits FROM fts_small_signed
+WHERE MATCH(content) AGAINST('nonexistentword absentword');
+--echo generic_four_term_fallback
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_signed
+WHERE MATCH(content) AGAINST('quasar nebula pulsar comet');
+--echo ordered_limit_offset
+SELECT id FROM fts_small_signed
+WHERE MATCH(content) AGAINST('quasar nebula pulsar') ORDER BY id LIMIT 3 OFFSET 2;
+
+CREATE TABLE fts_small_unsigned (id BIGINT UNSIGNED PRIMARY KEY, content TEXT) ORGANIZATION INDEX;
+INSERT INTO fts_small_unsigned VALUES
+(0,'quasar'),(1,'nebula'),(9223372036854775807,'pulsar'),
+(9223372036854775808,'quasar nebula'),(18446744073709551615,'quasar pulsar');
+ALTER TABLE fts_small_unsigned ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+--echo unsigned_order_across_signed_boundary
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_unsigned
+WHERE MATCH(content) AGAINST('quasar nebula pulsar');
+--echo unsigned_overlap_and_empty_list
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_unsigned
+WHERE MATCH(content) AGAINST('quasar nonexistentword');
+
+PREPARE fts_small_stmt FROM
+'SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_unsigned WHERE MATCH(content) AGAINST(?)';
+--echo prepared_reuse
+SET @fts_small_query='quasar';
+EXECUTE fts_small_stmt USING @fts_small_query;
+SET @fts_small_query='nebula pulsar';
+EXECUTE fts_small_stmt USING @fts_small_query;
+SET @fts_small_query='nonexistentword';
+EXECUTE fts_small_stmt USING @fts_small_query;
+SET @fts_small_query='quasar';
+EXECUTE fts_small_stmt USING @fts_small_query;
+DEALLOCATE PREPARE fts_small_stmt;
+CREATE TABLE fts_small_heap (id BIGINT, content TEXT) ORGANIZATION HEAP;
+INSERT INTO fts_small_heap SELECT id, content FROM fts_small_signed;
+ALTER TABLE fts_small_heap ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+--echo heap_integer_document_ids
+SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_heap
+WHERE MATCH(content) AGAINST('quasar nebula pulsar');
+SELECT COUNT(*) AS hits FROM fts_small_heap
+WHERE MATCH(content) AGAINST('quasar nonexistentword');
+DROP TABLE fts_small_signed, fts_small_unsigned, fts_small_heap;
+--enable_query_log
