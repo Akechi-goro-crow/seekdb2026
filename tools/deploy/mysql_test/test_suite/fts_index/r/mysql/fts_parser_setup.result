@@ -1,0 +1,57 @@
+==== normalized parser names preserve complete JSON ====
+select binary cast(tokenize('red blue green', ' SpAcE ') as char) = binary cast(tokenize('red blue green', 'space') as char) as space_equal;
+space_equal
+1
+select binary cast(tokenize('red blue green', ' BeNg ') as char) = binary cast(tokenize('red blue green', 'beng') as char) as beng_equal;
+beng_equal
+1
+select binary cast(tokenize('数据库全文索引', ' Ik ') as char) = binary cast(tokenize('数据库全文索引', 'ik') as char) as ik_equal;
+ik_equal
+1
+select binary cast(tokenize('abcd', ' NgRaM ') as char) = binary cast(tokenize('abcd', 'ngram') as char) as ngram_equal;
+ngram_equal
+1
+select binary cast(tokenize('abcd', ' NgRaM2 ') as char) = binary cast(tokenize('abcd', 'ngram2') as char) as ngram2_equal;
+ngram2_equal
+1
+==== explicit properties on changing texts and repeated parser names ====
+select json_unquote(json_extract(tokenize('moon sun', ' SpAcE ', '[{"additional_args":[{"min_token_size":4},{"max_token_size":8}]}]'), '$[0]')) as space_word;
+space_word
+moon
+select json_unquote(json_extract(tokenize('star sky', 'space', '[{"additional_args":[{"min_token_size":4},{"max_token_size":8}]}]'), '$[0]')) as space_word;
+space_word
+star
+select json_unquote(json_extract(tokenize('moon sun', ' BeNg ', '[{"additional_args":[{"min_token_size":4},{"max_token_size":8}]}]'), '$[0]')) as beng_word;
+beng_word
+moon
+select json_unquote(json_extract(tokenize('star sky', 'beng', '[{"additional_args":[{"min_token_size":4},{"max_token_size":8}]}]'), '$[0]')) as beng_word;
+beng_word
+star
+select json_length(tokenize('abcd', ' NGRAM ', '[]')) as ngram_count;
+ngram_count
+3
+select json_length(tokenize('pqrs', 'ngram', '[]')) as ngram_count;
+ngram_count
+3
+select json_length(tokenize('abcd', ' NGRAM2 ', '[]')) as ngram2_count;
+ngram2_count
+5
+select json_length(tokenize('pqrs', 'ngram2', '[]')) as ngram2_count;
+ngram2_count
+5
+select binary cast(tokenize('Database DATABASE database Content CONTENT', ' IK ', '[{"additional_args":[{"ik_mode":"smart"}]}]') as char) = binary '["database", "content"]' as ik_default;
+ik_default
+1
+select binary cast(tokenize('Database DATABASE database Content CONTENT', 'ik', '[{"additional_args":[{"ik_mode":"smart"}]}]') as char) = binary '["database", "content"]' as ik_default;
+ik_default
+1
+==== output mode and empty properties after cache replacement ====
+select binary cast(tokenize('red blue green', ' BENG ', '[{"output":"all"}]') as char) = binary cast(tokenize('red blue green', 'beng', '[{"output":"all"}]') as char) as all_equal;
+all_equal
+1
+select json_length(tokenize('moon sun', 'space', '[]')) as restored_default_count;
+restored_default_count
+2
+select json_length(tokenize('star sky', 'SPACE', '[]')) as restored_default_count;
+restored_default_count
+2
