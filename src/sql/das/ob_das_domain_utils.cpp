@@ -281,17 +281,13 @@ namespace
 int ensure_ft_word_map_ready(ObFTWordMap &word_map, const int64_t bkt_cnt)
 {
   int ret = OB_SUCCESS;
-  const int64_t need_bucket_cnt = common::hash::cal_next_prime(bkt_cnt);
   if (!word_map.created()) {
     ret = word_map.create(bkt_cnt, common::ObMemAttr("FTWordMap"));
-  } else if (word_map.bucket_count() != need_bucket_cnt) {
-    // Preserve the original bucket geometry so emitted row order remains
-    // stable while still reusing the map when document sizes are similar.
-    if (OB_FAIL(word_map.destroy())) {
-      LOG_WARN("fail to destroy reused ft word map", K(ret));
-    } else if (OB_FAIL(word_map.create(bkt_cnt, common::ObMemAttr("FTWordMap")))) {
-      LOG_WARN("fail to recreate ft word map", K(ret), K(bkt_cnt));
-    }
+  } else if (OB_FAIL(word_map.reuse())) {
+    // Keep the bucket array and node allocator between documents. Document
+    // lengths vary, so recreating the map here would add an allocation and a
+    // full bucket teardown to every row of an FTS build.
+    LOG_WARN("fail to reuse ft word map", K(ret), K(bkt_cnt), K(word_map.bucket_count()));
   }
   return ret;
 }
