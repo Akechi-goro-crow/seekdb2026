@@ -1,0 +1,35 @@
+# owner: fts
+# tags: fts
+# description: Interleaved postings must survive input refills within an output
+# batch. Compare every ID, not just COUNT, with an independently defined set.
+# The UNSIGNED primary key exercises integer ID projection. 8192 documents
+# exceed the normal vectorized batch size; OR and AND exhaust lists unevenly.
+# Expected IDs are multiples of 2 or 3 (OR), and multiples of 6 (AND).
+
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_refill_docs;
+DROP TABLE IF EXISTS fts_refill_digits;
+--enable_warnings
+CREATE TABLE fts_refill_digits (n INT PRIMARY KEY);
+INSERT INTO fts_refill_digits VALUES (0),(1),(2),(3),(4),(5),(6),(7),(8),(9);
+CREATE TABLE fts_refill_docs (id BIGINT UNSIGNED PRIMARY KEY, content TEXT NOT NULL);
+INSERT INTO fts_refill_docs
+SELECT n, CONCAT('ocean ', IF(MOD(n,2)=0,'database ',''), IF(MOD(n,3)=0,'performance ',''))
+FROM (SELECT 1+a.n+10*b.n+100*c.n+1000*d.n AS n
+      FROM fts_refill_digits a, fts_refill_digits b, fts_refill_digits c, fts_refill_digits d) seq
+WHERE n <= 8192;
+ALTER TABLE fts_refill_docs ADD FULLTEXT INDEX fti_content(content) WITH PARSER beng;
+--enable_query_log
+--echo === full hit set across batch refills ===
+SELECT id FROM fts_refill_docs WHERE MATCH(content) AGAINST('database performance') ORDER BY id;
+--echo === limit and offset after ID ordering ===
+SELECT id FROM fts_refill_docs WHERE MATCH(content) AGAINST('database performance') ORDER BY id LIMIT 7 OFFSET 510;
+--echo === boolean intersection ===
+SELECT id FROM fts_refill_docs WHERE MATCH(content) AGAINST('+database +performance' IN BOOLEAN MODE) ORDER BY id;
+--echo === no matching token ===
+SELECT COUNT(*) AS hits FROM fts_refill_docs WHERE MATCH(content) AGAINST('astronomy');
+--disable_query_log
+DROP TABLE fts_refill_docs;
+DROP TABLE fts_refill_digits;
+--enable_query_log

@@ -29,7 +29,8 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
       || OB_ISNULL(param.relevance_collector_)) {
     ret = OB_INVALID_ARGUMENT;
   } else if (OB_FAIL(ObSRDaaTIterImpl::init(*param.base_param_, *param.dim_iters_,
-                                            *param.allocator_, *param.relevance_collector_))) {
+                                            *param.allocator_, *param.relevance_collector_,
+                                            true /* enable_integer_buffer */))) {
   } else if (OB_FAIL(bm25_param_estimator_.init(param.bm25_param_est_ctx_))) {
   } else {
     mode_flag_ = param.mode_flag_;

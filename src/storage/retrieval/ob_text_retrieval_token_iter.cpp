@@ -439,16 +439,18 @@ int ObTextRetrievalDaaTTokenIter::init(const ObTextRetrievalScanIterParam &iter_
       max_batch_size_ = OB_MAX(iter_param.eval_ctx_->max_batch_size_, 1);
       common::ObDatumBasicFuncs *basic_funcs = ObDatumFuncs::get_basic_func(inv_scan_domain_id_col_->datum_meta_.type_, CS_TYPE_BINARY);
       cmp_func_ = basic_funcs->null_first_cmp_;
+      // Integer IDs use the stable value arrays below. Avoid constructing a
+      // second, unused ObDocIdExt array for every token in every query.
+      value_id_fast_ = inv_scan_domain_id_col_->datum_meta_.type_ == common::ObUInt64Type
+          || inv_scan_domain_id_col_->datum_meta_.type_ == common::ObIntType;
       if (OB_ISNULL(cmp_func_)) {
         ret = OB_ERR_UNEXPECTED;
       } else if (FALSE_IT(relevance_.set_allocator(allocator_))) {
       } else if (OB_FAIL(relevance_.init(max_batch_size_))) {
       } else if (OB_FAIL(relevance_.prepare_allocate(max_batch_size_))) {
       } else if (FALSE_IT(doc_id_.set_allocator(allocator_))) {
-      } else if (OB_FAIL(doc_id_.init(max_batch_size_))) {
-      } else if (OB_FAIL(doc_id_.prepare_allocate(max_batch_size_))) {
-      } else if (FALSE_IT(value_id_fast_ = (inv_scan_domain_id_col_->datum_meta_.type_ == common::ObUInt64Type
-          || inv_scan_domain_id_col_->datum_meta_.type_ == common::ObIntType))) {
+      } else if (OB_FAIL(doc_id_.init(value_id_fast_ ? 0 : max_batch_size_))) {
+      } else if (OB_FAIL(doc_id_.prepare_allocate(value_id_fast_ ? 0 : max_batch_size_))) {
       } else if (OB_UNLIKELY(value_id_fast_ && (FALSE_IT(fast_id_vals_.set_allocator(allocator_))
           || OB_FAIL(fast_id_vals_.init(max_batch_size_))
           || OB_FAIL(fast_id_vals_.prepare_allocate(max_batch_size_))))) {

@@ -76,7 +76,8 @@ public:
       ObSparseRetrievalMergeParam &iter_param,
       ObIArray<ObISRDaaTDimIter *> &dim_iters,
       ObIAllocator &iter_allocator,
-      ObSRDaaTRelevanceCollector &relevance_collector);
+      ObSRDaaTRelevanceCollector &relevance_collector,
+      const bool enable_integer_buffer = false);
   virtual void reuse(const bool switch_tablet = false) override;
   virtual void reset() override;
   virtual int get_query_max_score(double &score) override;
@@ -113,6 +114,7 @@ protected:
   ObSRDaaTRelevanceCollector *relevance_collector_;
   ObFixedArray<const ObDatum *, ObIAllocator> iter_domain_ids_; // record every dim iter's output domain id, one (ObDatum *) for one dim iter
   ObFixedArray<ObDocIdExt, ObIAllocator> buffered_domain_ids_; // cache for output
+  ObFixedArray<int64_t, ObIAllocator> buffered_integer_ids_; // compact output for integer IDs
   ObFixedArray<double, ObIAllocator> buffered_relevances_;
   ObFixedArray<int64_t, ObIAllocator> next_round_iter_idxes_;
   int64_t next_round_cnt_;
@@ -128,10 +130,8 @@ protected:
   // snapshot of dim_iters_ pointers taken at init, so the merge loop indexes a
   // plain array instead of paying the per-access virtual ObIArray::at dispatch
   ObFixedArray<ObISRDaaTDimIter *, ObIAllocator> dim_iter_ptr_cache_;
-  // true iff rows are projected into the expr datum vectors directly at cache
-  // time (vectorized + value-copyable doc id), replacing the buffered copy plus
-  // the second write in project_results(); see init()/cache_result().
-  bool direct_project_;
+  // Integer IDs need only a value buffer; other IDs retain the deep-copy path.
+  bool value_id_fast_;
 private:
   DISALLOW_COPY_AND_ASSIGN(ObSRDaaTIterImpl);
 };

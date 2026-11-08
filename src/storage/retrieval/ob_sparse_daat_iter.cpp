@@ -80,6 +80,7 @@ ObSRDaaTIterImpl::ObSRDaaTIterImpl()
     relevance_collector_(nullptr),
     iter_domain_ids_(),
     buffered_domain_ids_(),
+    buffered_integer_ids_(),
     buffered_relevances_(),
     next_round_iter_idxes_(),
     next_round_cnt_(0),
@@ -88,7 +89,7 @@ ObSRDaaTIterImpl::ObSRDaaTIterImpl()
     simple_merger_(nullptr),
     loser_tree_(nullptr),
     dim_iter_ptr_cache_(),
-    direct_project_(false)
+    value_id_fast_(false)
 {
 }
 
@@ -96,7 +97,8 @@ int ObSRDaaTIterImpl::init(
     ObSparseRetrievalMergeParam &iter_param,
     ObIArray<ObISRDaaTDimIter *> &dim_iters,
     ObIAllocator &iter_allocator,
-    ObSRDaaTRelevanceCollector &relevance_collector)
+    ObSRDaaTRelevanceCollector &relevance_collector,
+    const bool enable_integer_buffer)
 {
   int ret = OB_SUCCESS;
   if (IS_INIT) {
@@ -114,13 +116,9 @@ int ObSRDaaTIterImpl::init(
     } else {
       set_datum_func_ = ObISparseRetrievalMergeIter::set_datum_shallow;
     }
-    // Single-phase projection (write rows into the projection expr datum
-    // vectors directly at cache time) is only allowed when the doc id datum is
-    // self-contained, i.e. the same condition that selects set_datum_int: the
-    // projected int datum is a packed value. The shallow path would keep a
-    // pointer into the dim iter's batch storage, which gets overwritten as the
-    // iter advances, so those queries keep the buffered two-phase projection.
-    direct_project_ = iter_param_->eval_ctx_->is_vectorized()
+    // Input scans reuse the projection expression's datum vector. Keep output
+    // IDs in separate storage until all input refills for this batch finish.
+    value_id_fast_ = enable_integer_buffer
         && set_datum_func_ == ObISparseRetrievalMergeIter::set_datum_int;
     if (OB_UNLIKELY(dim_iters.count() == 0)) {
     } else if (OB_NOT_NULL(iter_param_->dim_weights_) && dim_iters.count() != iter_param_->dim_weights_->count()) {
@@ -132,8 +130,11 @@ int ObSRDaaTIterImpl::init(
     } else if (OB_FAIL(next_round_iter_idxes_.init(dim_iters.count()))) {
     } else if (OB_FAIL(next_round_iter_idxes_.prepare_allocate(dim_iters.count()))) {
     } else if (FALSE_IT(buffered_domain_ids_.set_allocator(iter_allocator_))) {
-    } else if (OB_FAIL(buffered_domain_ids_.init(max_batch_size))) {
-    } else if (OB_FAIL(buffered_domain_ids_.prepare_allocate(max_batch_size))) {
+    } else if (OB_FAIL(buffered_domain_ids_.init(value_id_fast_ ? 0 : max_batch_size))) {
+    } else if (OB_FAIL(buffered_domain_ids_.prepare_allocate(value_id_fast_ ? 0 : max_batch_size))) {
+    } else if (FALSE_IT(buffered_integer_ids_.set_allocator(iter_allocator_))) {
+    } else if (OB_FAIL(buffered_integer_ids_.init(value_id_fast_ ? max_batch_size : 0))) {
+    } else if (OB_FAIL(buffered_integer_ids_.prepare_allocate(value_id_fast_ ? max_batch_size : 0))) {
     } else if (FALSE_IT(buffered_relevances_.set_allocator(iter_allocator_))) {
     } else if (OB_FAIL(buffered_relevances_.init(max_batch_size))) {
     } else if (OB_FAIL(buffered_relevances_.prepare_allocate(max_batch_size))) {
@@ -190,6 +191,7 @@ void ObSRDaaTIterImpl::reset()
   }
   iter_domain_ids_.reset();
   buffered_domain_ids_.reset();
+  buffered_integer_ids_.reset();
   buffered_relevances_.reset();
   next_round_iter_idxes_.reset();
   dim_iter_ptr_cache_.reset();
@@ -278,7 +280,7 @@ int ObSRDaaTIterImpl::get_next_rows(const int64_t capacity, int64_t &count)
     }
 
     if (OB_SUCC(ret) || OB_ITER_END == ret) {
-      if (count > 0 && !direct_project_ && OB_FAIL(project_results(count))) {
+      if (count > 0 && OB_FAIL(project_results(count))) {
       }
     }
 
@@ -439,44 +441,14 @@ int ObSRDaaTIterImpl::cache_result(int64_t &count, const ObDatum &id_datum, cons
   if (limit_param->is_valid() && input_row_cnt_ <= offset) {
     // TODO: Maybe we should not process offset logic here
     // don't need to project
-  } else if (OB_UNLIKELY(count >= buffered_domain_ids_.count() || count >= buffered_relevances_.count())) {
+  } else if (OB_UNLIKELY(count >= buffered_relevances_.count()
+      || count >= (value_id_fast_ ? buffered_integer_ids_.count() : buffered_domain_ids_.count()))) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_LIKELY(direct_project_)) {
-    // Single-phase projection for value-copyable doc ids (vectorized + the
-    // set_datum_int case checked at init): write the row straight into the
-    // projection expr datum vectors at batch index $count. This replaces the
-    // buffered ObDocIdExt deep copy plus the second write in project_results()
-    // with one write of the same values. The datum writes and the evaluated
-    // flags below are exactly what project_results(count) did for the same
-    // row, so hit set, row order, relevance values and the LIMIT/OFFSET
-    // counting (still driven by input_row_cnt_/output_row_cnt_) are unchanged.
-    ObEvalCtx *eval_ctx = iter_param_->eval_ctx_;
-    if (OB_UNLIKELY(count >= eval_ctx->max_batch_size_)) {
-      ret = OB_INVALID_ARGUMENT;
-    } else {
-      ObEvalCtx::BatchInfoScopeGuard guard(*eval_ctx);
-      guard.set_batch_idx(count);
-      ObExpr *id_proj_expr = iter_param_->id_proj_expr_;
-      ObDatum &id_proj_datum = id_proj_expr->locate_datum_for_write(*eval_ctx);
-      // identical to set_datum_int(id_proj_datum, doc_id) where doc_id wraps id_datum
-      id_proj_datum.set_int(id_datum.get_int());
-      id_proj_expr->get_evaluated_flags(*eval_ctx).set(count);
-      id_proj_expr->set_evaluated_projected(*eval_ctx);
-      if (iter_param_->need_project_relevance()) {
-        ObExpr *rel_proj_expr = iter_param_->relevance_proj_expr_;
-        ObDatum &rel_proj_datum = rel_proj_expr->locate_datum_for_write(*eval_ctx);
-        rel_proj_datum.set_double(relevance);
-        rel_proj_expr->get_evaluated_flags(*eval_ctx).set(count);
-        rel_proj_expr->set_evaluated_projected(*eval_ctx);
-      }
-      ++count;
-      ++output_row_cnt_;
-      if (limit_param->is_valid() && output_row_cnt_ >= limit) {
-        ret = OB_ITER_END;
-      }
-    }
+  } else if (!value_id_fast_ && OB_FAIL(buffered_domain_ids_[count].from_datum(id_datum))) {
   } else {
-    buffered_domain_ids_[count].from_datum(id_datum);
+    if (value_id_fast_) {
+      buffered_integer_ids_[count] = id_datum.get_int();
+    }
     buffered_relevances_[count] = relevance;
     ++count;
     ++output_row_cnt_;
@@ -500,7 +472,11 @@ int ObSRDaaTIterImpl::project_results(const int64_t count)
     for (int64_t i = 0; i < count; ++i) {
       guard.set_batch_idx(i);
       ObDatum &id_proj_datum = id_proj_expr->locate_datum_for_write(*eval_ctx);
-      set_datum_func_(id_proj_datum, buffered_domain_ids_[i]);
+      if (value_id_fast_) {
+        id_proj_datum.set_int(buffered_integer_ids_[i]);
+      } else {
+        set_datum_func_(id_proj_datum, buffered_domain_ids_[i]);
+      }
       id_evaluated_flags.set(i);
       id_proj_expr->set_evaluated_projected(*eval_ctx);
     }
@@ -519,7 +495,11 @@ int ObSRDaaTIterImpl::project_results(const int64_t count)
   } else {
     guard.set_batch_idx(0);
     ObDatum &id_proj_datum = id_proj_expr->locate_datum_for_write(*eval_ctx);
-    set_datum_func_(id_proj_datum, buffered_domain_ids_[0]);
+    if (value_id_fast_) {
+      id_proj_datum.set_int(buffered_integer_ids_[0]);
+    } else {
+      set_datum_func_(id_proj_datum, buffered_domain_ids_[0]);
+    }
     id_proj_expr->set_evaluated_projected(*eval_ctx);
     ObDatum &relevance_proj_datum = relevance_proj_expr->locate_datum_for_write(*eval_ctx);
     relevance_proj_datum.set_double(buffered_relevances_[0]);
