@@ -286,7 +286,7 @@ int acquire_reuse_parser(ObFTParserParam *param, ObFTDictHub *hub,
         ret = OB_ALLOCATE_MEMORY_FAILED;
       } else {
         slot->parser_ = new_parser;
-        new_parser->set_pooled(slot->scratch_alloc_);
+        new_parser->set_pooled();
       }
     }
     if (OB_SUCC(ret)) {
@@ -594,10 +594,13 @@ void ObIKFTParser::release_to_pool()
     ctx_->release_scratch();
   }
 
-  // All scratch references have been cleared above. Keep at most one normal
-  // page for the next document; large pages and additional pages are freed.
-  // Unlike reuse(), this bounds retained memory after unusually large input.
-  pooled_scratch_alloc_->reset_remain_one_page();
+  // 3. recycle the per-call scratch memory. reset() (not reuse()): the
+  //    retained-page path of reuse() was measured to grow RSS linearly with
+  //    large documents (page list bookkeeping vs. the per-call big-page
+  //    churn), while reset() returns every page to the module allocator, so
+  //    the per-call footprint is exactly what a fresh parser would have
+  //    allocated. The pool still saves the parser/ctx/segmenter/dict builds.
+  allocator_.reset();
 
   is_inited_ = false;
 }

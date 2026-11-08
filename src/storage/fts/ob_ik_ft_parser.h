@@ -17,7 +17,6 @@
 #ifndef _OCEANBASE_STORAGE_FTS_OB_IK_FT_PARSER_H_
 #define _OCEANBASE_STORAGE_FTS_OB_IK_FT_PARSER_H_
 
-#include "lib/allocator/page_arena.h"
 #include "lib/allocator/ob_allocator.h"
 #include "storage/fts/dict/ob_ft_cache_container.h"
 #include "storage/fts/dict/ob_ft_dict.h"
@@ -52,7 +51,6 @@ public:
         obj_alloc_(obj_alloc),
         is_inited_(false),
         pooled_(false),
-        pooled_scratch_alloc_(nullptr),
         built_(false),
         coll_type_(ObCollationType::CS_TYPE_INVALID),
         ctx_(nullptr),
@@ -89,11 +87,7 @@ public:
   bool is_built() const { return built_; }
   bool is_inited() const { return is_inited_; }
   bool is_pooled() const { return pooled_; }
-  void set_pooled(common::ObArenaAllocator &scratch_alloc)
-  {
-    pooled_ = true;
-    pooled_scratch_alloc_ = &scratch_alloc;
-  }
+  void set_pooled() { pooled_ = true; }
 
   int get_next_token(const char *&word,
                      int64_t &word_len,
@@ -139,7 +133,6 @@ private:
   ObIAllocator &obj_alloc_;
   bool is_inited_;
   bool pooled_;
-  common::ObArenaAllocator *pooled_scratch_alloc_;
   // persistent objects (ctx object, segmenters, pinned dicts) are built and
   // usable; cleared only by reset(), never by release_to_pool()
   bool built_;
