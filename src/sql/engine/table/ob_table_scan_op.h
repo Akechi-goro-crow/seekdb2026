@@ -735,6 +735,9 @@ protected:
   bool in_rescan_;
   ObDomainIndexCache domain_index_;
   ObFTIndexRowCache fts_index_;
+  // The output expression list belongs to the immutable scan spec. Cache
+  // expression identities only; datum locations are resolved for each row.
+  ObExpr *fts_column_exprs_[4] = {};
 
   // output_ is used to output data, TSC operator directly invokes output_::get_next_row(s),
   // it points to fold_iter_ in group rescan and iter_tree_ in normal scan.
