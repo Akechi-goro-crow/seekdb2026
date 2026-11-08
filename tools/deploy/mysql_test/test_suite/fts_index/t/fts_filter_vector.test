@@ -1,0 +1,39 @@
+# owner: fts
+# tags: fts vector
+# description: A boolean-only MATCH must retain its predicate and relevance
+# projection when an HNSW adaptive scan can perform functional lookup.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_filter_vector_docs;
+--enable_warnings
+ALTER SYSTEM SET vector_memory_limit = 0;
+sleep 3;
+CREATE TABLE fts_filter_vector_docs (
+  id BIGINT PRIMARY KEY,
+  content TEXT,
+  embedding VECTOR(3),
+  FULLTEXT INDEX ft(content) WITH PARSER beng,
+  VECTOR INDEX vi(embedding) WITH (distance=l2, type=hnsw, lib=vsag)
+);
+INSERT INTO fts_filter_vector_docs VALUES
+(1,'galaxy','[0,0,0]'),
+(2,'quasar','[1,0,0]'),
+(3,'nebula','[2,0,0]'),
+(4,'quasar quasar','[3,0,0]'),
+(5,'quasar nebula','[4,0,0]'),
+(6,'galaxy','[5,0,0]');
+
+# The fulltext hint selects the HNSW adaptive scan with a fulltext access path.
+# Keep MATCH out of the projection so the filter-only proof otherwise applies.
+--echo vector_filtered_topk
+SELECT /*+ INDEX(fts_filter_vector_docs ft) */ id FROM fts_filter_vector_docs
+WHERE MATCH(content) AGAINST('quasar')
+ORDER BY l2_distance(embedding, '[0,0,0]') APPROXIMATE LIMIT 2;
+
+--echo vector_filtered_complete_ids
+SELECT /*+ INDEX(fts_filter_vector_docs ft) */ id FROM fts_filter_vector_docs
+WHERE MATCH(content) AGAINST('quasar')
+ORDER BY l2_distance(embedding, '[0,0,0]') APPROXIMATE LIMIT 10;
+
+DROP TABLE fts_filter_vector_docs;
+--enable_query_log

@@ -12086,7 +12086,10 @@ int ObLogPlan::prepare_text_retrieval_scan(const ObIArray<ObRawExpr *> &scan_mat
     tr_info.match_expr_ = match_against;
     tr_info.pushdown_match_filter_ = match_pred;
     bool filter_only = false;
-    if (all_match_filters.count() == 1 && scan_match_filters.count() == 1
+    // Vector adaptive scans also evaluate MATCH after functional lookup.
+    // They must retain the predicate and its relevance projection.
+    if (!table_scan->is_vec_idx_scan()
+        && all_match_filters.count() == 1 && scan_match_filters.count() == 1
         && OB_FAIL(check_fts_filter_only(*get_stmt(), *match_against, *match_pred, filter_only))) {
     } else if (filter_only) {
       tr_info.need_calc_relevance_ = false;
