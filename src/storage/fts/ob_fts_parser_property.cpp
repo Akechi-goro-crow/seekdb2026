@@ -1035,6 +1035,7 @@ int ObFTParserJsonProps::show_parser_properties(const ObFTParserJsonProps &prope
 int ObFTParserProperty::parse_for_parser_helper(const ObFTParser &parser, const ObString &json_str)
 {
   int ret = OB_SUCCESS;
+  ObFTParserJsonProps props;
   const ObFTParserName &parser_name = parser.get_parser_name();
   const ObString name_str(parser_name.len(), parser_name.str());
   for (int64_t i = 0; i < FTS_PARSER_PROPERTY_CACHE_SIZE; ++i) {
@@ -1044,7 +1045,6 @@ int ObFTParserProperty::parse_for_parser_helper(const ObFTParser &parser, const 
       return OB_SUCCESS;
     }
   }
-  ObFTParserJsonProps props;
   if (OB_FAIL(props.init())) {
   } else if (OB_FAIL(props.parse_from_valid_str(json_str))) {
   } else {

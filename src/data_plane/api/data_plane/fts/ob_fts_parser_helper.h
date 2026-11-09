@@ -67,10 +67,10 @@ public:
   int serialize_to_str(char *buf, const int64_t buf_len);
   int get_desc(const ObIFTParserDesc *&parser_desc) const;
 
-  // Builtin literals are already lowercase; parser_name_ is normalized by set_name().
 #define FT_PARSER_TYPE(fts_type, parser_name)                          \
   OB_INLINE bool is_##parser_name() const {                            \
-    return 0 == STRCMP(NAME_STR[fts_type], parser_name_.str());          \
+    ParserType type = fts_type;                                        \
+    return ObFTParserName(NAME_STR[type]) == parser_name_;             \
   }
   FTS_BUILD_IN_PARSER_LIST
 #undef FT_PARSER_TYPE

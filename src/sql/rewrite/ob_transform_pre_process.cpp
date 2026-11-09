@@ -179,7 +179,7 @@ int ObTransformPreProcess::transform_one_stmt(common::ObIArray<ObParentDMLStmt> 
     }
     if (OB_SUCC(ret)) {
       if (stmt->get_match_exprs().count() > 0 &&
-          OB_FAIL(preserve_order_for_fulltext_search(parent_stmts, stmt, is_happened))) {
+          OB_FAIL(preserve_order_for_fulltext_search(stmt, is_happened))) {
       } else {
         trans_happened |= is_happened;
       }
@@ -3788,91 +3788,9 @@ int ObTransformPreProcess::do_flatten_conditions(ObDMLStmt *stmt, ObIArray<ObRaw
   return ret;
 }
 
-// A direct scalar COUNT(*) sees only the cardinality of its derived table. For
-// a plain MATCH filter with LIMIT/OFFSET that cardinality is independent of
-// relevance order. Do not introduce a score dependency in this narrow case:
-// the normal LIMIT can stop the score-free retrieval once enough rows arrive.
-// All expressions that could observe row identity, score, or evaluation order
-// are excluded. In particular, COUNT(expr) and predicates in the parent need
-// the original choice of rows, even though the final result is a count.
-static bool is_count_only_fulltext_child(const ObIArray<ObParentDMLStmt> &parent_stmts,
-                                       const ObDMLStmt &stmt)
-{
-  if (parent_stmts.empty() || !stmt.is_select_stmt() || stmt.is_set_stmt()) {
-    return false;
-  }
-  const ObDMLStmt *parent_stmt = parent_stmts.at(parent_stmts.count() - 1).stmt_;
-  if (nullptr == parent_stmt || !parent_stmt->is_select_stmt() || parent_stmt->is_set_stmt()) {
-    return false;
-  }
-  const ObSelectStmt &parent = *static_cast<const ObSelectStmt *>(parent_stmt);
-  const ObSelectStmt &child = static_cast<const ObSelectStmt &>(stmt);
-  if (parent.get_table_size() != 1 || parent.get_from_item_size() != 1
-      || parent.get_select_item_size() != 1 || parent.get_aggr_item_size() != 1
-      || !parent.is_scala_group_by() || parent.has_distinct() || parent.has_having()
-      || parent.has_window_function() || parent.has_window_function_filter()
-      || parent.has_order_by() || parent.has_limit() || parent.has_recursive_cte()
-      || parent.has_for_update() || parent.has_select_into() || parent.is_calc_found_rows()
-      || parent.has_vec_approx() || !parent.get_condition_exprs().empty()
-      || !parent.get_subquery_exprs().empty() || !parent.get_match_exprs().empty()) {
-    return false;
-  }
-  const TableItem *derived = parent.get_table_item(0);
-  const ObAggFunRawExpr *count = parent.get_aggr_item(0);
-  if (nullptr == derived || !derived->is_generated_table()
-      || derived->ref_query_ != &child || derived->cte_type_ != TableItem::NOT_CTE
-      || derived->is_view_table_ || derived->is_has_sample_info()
-      || !derived->exec_params_.empty() || parent.get_from_item(0).is_joined_
-      || parent.get_from_item(0).table_id_ != derived->table_id_
-      || nullptr == count || parent.get_select_item(0).expr_ != count
-      || count->get_expr_type() != T_FUN_COUNT || count->get_real_param_count() != 0
-      || count->is_param_distinct()) {
-    return false;
-  }
-  if (child.get_table_size() != 1 || child.get_from_item_size() != 1
-      || child.get_select_item_size() == 0 || child.has_order_by() || child.has_group_by()
-      || child.get_aggr_item_size() != 0
-      || child.has_distinct() || child.has_having() || child.has_window_function()
-      || child.has_window_function_filter() || child.has_recursive_cte()
-      || child.has_for_update() || child.has_select_into() || child.is_calc_found_rows()
-      || child.has_vec_approx() || child.is_fetch_with_ties()
-      || nullptr != child.get_limit_percent_expr() || nullptr == child.get_limit_expr()
-      || !child.get_limit_expr()->is_const_raw_expr()
-      || (nullptr != child.get_offset_expr() && !child.get_offset_expr()->is_const_raw_expr())
-      || !child.get_subquery_exprs().empty() || child.get_match_exprs().count() != 1
-      || child.get_condition_exprs().count() != 1) {
-    return false;
-  }
-  const TableItem *base = child.get_table_item(0);
-  const ObMatchFunRawExpr *match = child.get_match_exprs().at(0);
-  const ObRawExpr *condition = child.get_condition_exprs().at(0);
-  if (nullptr == base || !base->is_basic_table() || base->is_view_table_
-      || base->is_has_sample_info() || child.get_from_item(0).is_joined_
-      || child.get_from_item(0).table_id_ != base->table_id_
-      || nullptr == match || match->is_es_match()
-      || match->get_mode_flag() != NATURAL_LANGUAGE_MODE || !match->get_columns_boosts().empty()
-      || nullptr == match->get_search_key() || !match->get_search_key()->is_const_raw_expr()
-      || nullptr == condition || condition->get_expr_type() != T_OP_BOOL
-      || condition->get_param_count() != 1 || condition->get_param_expr(0) != match) {
-    return false;
-  }
-  for (int64_t i = 0; i < child.get_select_item_size(); ++i) {
-    const ObRawExpr *expr = child.get_select_item(i).expr_;
-    if (nullptr == expr || !expr->is_column_ref_expr()) {
-      return false;
-    }
-    const ObColumnRefRawExpr *column = static_cast<const ObColumnRefRawExpr *>(expr);
-    if (column->is_generated_column() || column->get_table_id() != base->table_id_) {
-      return false;
-    }
-  }
-  return true;
-}
-
 // full-text index queries on a single base table are processed with order preservation. 
 // (Order is not preserved in multi-table join scenarios.)
-int ObTransformPreProcess::preserve_order_for_fulltext_search(
-    const ObIArray<ObParentDMLStmt> &parent_stmts, ObDMLStmt *stmt, bool& trans_happened)
+int ObTransformPreProcess::preserve_order_for_fulltext_search(ObDMLStmt *stmt, bool& trans_happened)
 {
   int ret = OB_SUCCESS;
   trans_happened = false;
@@ -3880,8 +3798,6 @@ int ObTransformPreProcess::preserve_order_for_fulltext_search(
   ObRawExpr *match_expr = nullptr;
   if (OB_ISNULL(stmt)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (is_count_only_fulltext_child(parent_stmts, *stmt)) {
-    // The parent observes cardinality only; leave the implicit order absent.
   } else if (stmt->get_table_items().count() != 1 || stmt->get_order_item_size() != 0) {
     // do nothing
   } else if (stmt->is_select_stmt() && 

@@ -476,6 +476,7 @@ int ObExprTokenize::parse_parser_properties(const ObExpr &expr,
 int ObExprTokenize::TokenizeParam::reform_parser_properties(const ObString &properties)
 {
   int ret = OB_SUCCESS;
+  storage::ObFTParserJsonProps parser_properties;
   const ObString raw_properties = properties;
 
   for (int64_t i = 0; i < TOKENIZE_PROPS_CACHE_SIZE; ++i) {
@@ -487,7 +488,6 @@ int ObExprTokenize::TokenizeParam::reform_parser_properties(const ObString &prop
     }
   }
 
-  storage::ObFTParserJsonProps parser_properties;
   if (OB_FAIL(parser_properties.init())) {
   } else if (OB_FAIL(parser_properties.parse_from_valid_str(properties))) {
     LOG_USER_ERROR(OB_INVALID_ARGUMENT, "parser properties invalid.");

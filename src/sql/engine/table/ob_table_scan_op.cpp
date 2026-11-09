@@ -3715,18 +3715,12 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
     ObExpr *&expr)
 {
   int ret = OB_SUCCESS;
-  int64_t cache_idx = -1;
   expr = nullptr;
-  switch (type) {
-    case T_FUN_SYS_WORD_SEGMENT: cache_idx = 0; break;
-    case T_FUN_SYS_DOC_ID: cache_idx = 1; break;
-    case T_FUN_SYS_WORD_COUNT: cache_idx = 2; break;
-    case T_FUN_SYS_DOC_LENGTH: cache_idx = 3; break;
-    default: ret = OB_INVALID_ARGUMENT; break;
-  }
-  if (OB_FAIL(ret)) {
-  } else if (OB_NOT_NULL(fts_column_exprs_[cache_idx])) {
-    expr = fts_column_exprs_[cache_idx];
+  if (OB_UNLIKELY(T_FUN_SYS_WORD_SEGMENT != type
+               && T_FUN_SYS_DOC_ID != type
+               && T_FUN_SYS_WORD_COUNT != type
+               && T_FUN_SYS_DOC_LENGTH != type)) {
+    ret = OB_INVALID_ARGUMENT;
   } else if (T_FUN_SYS_DOC_ID == type) {
     for (int64_t i = 0; OB_SUCC(ret) && OB_ISNULL(expr) && i < MY_SPEC.output_.count(); ++i) {
       ObExpr *tmp_expr = MY_SPEC.output_.at(i);
@@ -3753,8 +3747,6 @@ int ObTableScanOp::get_output_fts_col_expr_by_type(
   }
   if (OB_SUCC(ret) && OB_ISNULL(expr)) {
     ret = OB_ERR_UNEXPECTED;
-  } else if (OB_SUCC(ret)) {
-    fts_column_exprs_[cache_idx] = expr;
   }
   return ret;
 }
