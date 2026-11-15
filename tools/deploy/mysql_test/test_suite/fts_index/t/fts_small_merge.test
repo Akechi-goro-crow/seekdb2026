@@ -8,6 +8,8 @@
 DROP TABLE IF EXISTS fts_small_signed;
 DROP TABLE IF EXISTS fts_small_unsigned;
 DROP TABLE IF EXISTS fts_small_heap;
+DROP TABLE IF EXISTS fts_small_binary_batch;
+DROP TABLE IF EXISTS fts_small_digits;
 --enable_warnings
 CREATE TABLE fts_small_signed (id BIGINT PRIMARY KEY, content TEXT) ORGANIZATION INDEX;
 INSERT INTO fts_small_signed VALUES
@@ -69,5 +71,56 @@ SELECT GROUP_CONCAT(id ORDER BY id) AS ids FROM fts_small_heap
 WHERE MATCH(content) AGAINST('quasar nebula pulsar');
 SELECT COUNT(*) AS hits FROM fts_small_heap
 WHERE MATCH(content) AGAINST('quasar nonexistentword');
+
+# More than one vector batch of generated 16-byte binary document IDs. Compare
+# the complete ordered result strings with an independent arithmetic oracle;
+# the enlarged limit prevents GROUP_CONCAT truncation from hiding differences.
+SET @fts_small_old_concat_len=@@group_concat_max_len;
+SET SESSION group_concat_max_len=100000;
+CREATE TABLE fts_small_digits (n INT PRIMARY KEY);
+INSERT INTO fts_small_digits VALUES (0),(1),(2),(3),(4),(5),(6),(7);
+CREATE TABLE fts_small_binary_batch (id BIGINT PRIMARY KEY, content TEXT) ORGANIZATION INDEX;
+INSERT INTO fts_small_binary_batch
+SELECT n, CONCAT(IF(MOD(n,2)=0,'quasar ',''),
+                 IF(MOD(n,3)=0,'nebula ',''),
+                 IF(MOD(n,5)=0,'pulsar ',''),'comet')
+FROM (SELECT a.n+8*b.n+64*c.n+512*d.n AS n
+      FROM fts_small_digits a, fts_small_digits b,
+           fts_small_digits c, fts_small_digits d) numbers;
+ALTER TABLE fts_small_binary_batch ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+--echo binary_document_ids_across_batches
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MOD(id,2)=0 OR MOD(id,3)=0) AS same_ids;
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MATCH(content) AGAINST('quasar nebula pulsar')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MOD(id,2)=0 OR MOD(id,3)=0 OR MOD(id,5)=0) AS same_ids;
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MATCH(content) AGAINST('quasar nonexistentword')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MOD(id,2)=0) AS same_ids;
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch
+  WHERE MATCH(content) AGAINST('quasar nebula pulsar comet')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch) AS same_ids;
+--echo binary_document_ids_prepared_reuse
+PREPARE fts_small_binary_stmt FROM
+'SELECT (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch WHERE MATCH(content) AGAINST(?)) <=> (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_small_binary_batch WHERE content LIKE ?) AS same_ids';
+SET @fts_small_query='quasar', @fts_small_pattern='%quasar%';
+EXECUTE fts_small_binary_stmt USING @fts_small_query, @fts_small_pattern;
+SET @fts_small_query='pulsar', @fts_small_pattern='%pulsar%';
+EXECUTE fts_small_binary_stmt USING @fts_small_query, @fts_small_pattern;
+SET @fts_small_query='nonexistentword', @fts_small_pattern='%nonexistentword%';
+EXECUTE fts_small_binary_stmt USING @fts_small_query, @fts_small_pattern;
+SET @fts_small_query='quasar', @fts_small_pattern='%quasar%';
+EXECUTE fts_small_binary_stmt USING @fts_small_query, @fts_small_pattern;
+DEALLOCATE PREPARE fts_small_binary_stmt;
+DROP TABLE fts_small_binary_batch, fts_small_digits;
+SET SESSION group_concat_max_len=@fts_small_old_concat_len;
 DROP TABLE fts_small_signed, fts_small_unsigned, fts_small_heap;
 --enable_query_log

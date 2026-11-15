@@ -57,7 +57,8 @@ public:
       mode_flag_(sql::ObMatchAgainstMode::NATURAL_LANGUAGE_MODE),
       function_lookup_mode_(false),
       use_small_merge_(false),
-      unsigned_integer_id_(false) {}
+      unsigned_integer_id_(false),
+      binary_string_id_(false) {}
   virtual ~ObTextDaaTIter() { reset(); }
 
   int init(const ObTextDaaTParam &param);
@@ -72,6 +73,7 @@ protected:
   bool function_lookup_mode_;
   bool use_small_merge_;
   bool unsigned_integer_id_;
+  bool binary_string_id_;
 private:
   DISALLOW_COPY_AND_ASSIGN(ObTextDaaTIter);
 };

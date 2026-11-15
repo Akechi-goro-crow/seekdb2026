@@ -49,6 +49,8 @@ int ObTextDaaTIter::init(const ObTextDaaTParam &param)
         && dim_iters_->count() > 0
         && dim_iters_->count() <= ObSRSimpleMerger::USE_SIMPLE_MERGER_MAX_TABLE_CNT;
     unsigned_integer_id_ = iter_param_->id_proj_expr_->datum_meta_.type_ == common::ObUInt64Type;
+    binary_string_id_ = iter_param_->id_proj_expr_->datum_meta_.type_ == common::ObVarcharType
+        && iter_param_->id_proj_expr_->datum_meta_.cs_type_ == common::CS_TYPE_BINARY;
   }
   return ret;
 }
@@ -57,6 +59,7 @@ void ObTextDaaTIter::reset()
 {
   use_small_merge_ = false;
   unsigned_integer_id_ = false;
+  binary_string_id_ = false;
   bm25_param_estimator_.reset();
   // this class can know the type of dim_iters_, but ObSRDaaTIterImpl maybe not
   if (OB_NOT_NULL(dim_iters_)) {
@@ -129,6 +132,14 @@ int ObTextDaaTIter::do_one_merge_round(int64_t &count)
             cmp_ret = unsigned_integer_id_
                 ? (id->get_uint() > min_id->get_uint()) - (id->get_uint() < min_id->get_uint())
                 : (id->get_int() > min_id->get_int()) - (id->get_int() < min_id->get_int());
+          } else if (binary_string_id_ && !id->is_null() && !min_id->is_null()
+              && id->len_ == common::OB_DOC_ID_COLUMN_BYTE_LENGTH
+              && min_id->len_ == common::OB_DOC_ID_COLUMN_BYTE_LENGTH) {
+            // Generated document IDs are fixed-width binary strings. The
+            // binary collation compares equal-length strings byte for byte;
+            // avoid its indirect dispatch for this common representation.
+            const int cmp = MEMCMP(id->ptr_, min_id->ptr_, common::OB_DOC_ID_COLUMN_BYTE_LENGTH);
+            cmp_ret = (cmp > 0) - (cmp < 0);
           } else {
             ObSRMergeItem item;
             item.iter_idx_ = i;
