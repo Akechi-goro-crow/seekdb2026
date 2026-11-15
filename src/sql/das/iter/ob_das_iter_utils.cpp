@@ -1118,7 +1118,31 @@ int ObDASIterUtils::create_text_retrieval_tree(ObTableScanParam &scan_param,
         main_lookup_keep_order = true;
         // TODO: may be optimized to use forward
       }
-      if (table_lookup_ctdef->op_type_ != ObDASOpType::DAS_OP_INDEX_PROJ_LOOKUP) {
+      if (table_lookup_ctdef->op_type_ != table_lookup_rtdef->op_type_) {
+        ret = OB_ERR_UNEXPECTED;
+      } else if (table_lookup_ctdef->op_type_ == ObDASOpType::DAS_OP_TABLE_LOOKUP) {
+        // A direct document ID scan without projected scores uses an ordinary
+        // table lookup. Keep the attached output and any domain-ID merge on
+        // the data-table side, just as for the auxiliary document-ID lookup.
+        if (main_lookup_keep_order) {
+          table_lookup_rtdef->get_lookup_scan_rtdef()->scan_flag_.scan_order_ = ObQueryFlag::KeepOrder;
+        }
+        ObEvalCtx *eval_ctx = table_lookup_rtdef->get_lookup_scan_rtdef()->eval_ctx_;
+        const int64_t batch_row_count = eval_ctx->is_vectorized() ? eval_ctx->max_batch_size_ : 1;
+        ObDASIter *local_lookup_result = nullptr;
+        if (OB_FAIL(create_local_lookup_sub_tree(
+            scan_param, alloc,
+            table_lookup_ctdef->get_rowkey_scan_ctdef(),
+            table_lookup_rtdef->get_rowkey_scan_rtdef(),
+            table_lookup_ctdef->get_lookup_scan_ctdef(),
+            table_lookup_rtdef->get_lookup_scan_rtdef(),
+            table_lookup_ctdef, table_lookup_rtdef, related_tablet_ids,
+            trans_desc, snapshot, related_tablet_ids.lookup_tablet_id_,
+            root_iter, local_lookup_result, batch_row_count))) {
+        } else {
+          root_iter = local_lookup_result;
+        }
+      } else if (table_lookup_ctdef->op_type_ != ObDASOpType::DAS_OP_INDEX_PROJ_LOOKUP) {
         ret = OB_ERR_UNEXPECTED;
       } else if (OB_FAIL(create_cache_lookup_sub_tree(
           scan_param,
@@ -1784,8 +1808,9 @@ int ObDASIterUtils::create_domain_lookup_sub_tree(ObTableScanParam &scan_param,
 
   if (OB_ISNULL(table_lookup_ctdef) || OB_ISNULL(table_lookup_rtdef)) {
     ret = OB_INVALID_ARGUMENT;
-  } else if (OB_UNLIKELY(table_lookup_ctdef->op_type_ != ObDASOpType::DAS_OP_INDEX_PROJ_LOOKUP ||
-                         table_lookup_rtdef->op_type_ != ObDASOpType::DAS_OP_INDEX_PROJ_LOOKUP)) {
+  } else if (OB_UNLIKELY(table_lookup_ctdef->op_type_ != table_lookup_rtdef->op_type_ ||
+                         (table_lookup_ctdef->op_type_ != ObDASOpType::DAS_OP_TABLE_LOOKUP &&
+                          table_lookup_ctdef->op_type_ != ObDASOpType::DAS_OP_INDEX_PROJ_LOOKUP))) {
     ret = OB_ERR_UNEXPECTED;
   } else if (OB_UNLIKELY(table_lookup_ctdef->get_rowkey_scan_ctdef()->op_type_ != ObDASOpType::DAS_OP_IR_AUX_LOOKUP)) {
     ret = OB_ERR_UNEXPECTED;

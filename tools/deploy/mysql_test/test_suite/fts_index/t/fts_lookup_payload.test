@@ -1,0 +1,175 @@
+# owner: fts
+# tags: fts
+# description: Filter-only FTS must look up non-index payload columns for both
+# direct heap document IDs and the auxiliary document-to-rowkey lookup path.
+# A separate arithmetic oracle checks complete ID/payload pairs across batches.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_lookup_heap;
+DROP TABLE IF EXISTS fts_lookup_index;
+DROP TABLE IF EXISTS fts_lookup_oracle;
+DROP TABLE IF EXISTS fts_lookup_digits;
+--enable_warnings
+SET @fts_lookup_old_concat_len=@@group_concat_max_len;
+SET SESSION group_concat_max_len=1000000;
+CREATE TABLE fts_lookup_digits (n INT PRIMARY KEY);
+INSERT INTO fts_lookup_digits VALUES (0),(1),(2),(3),(4),(5),(6),(7);
+CREATE TABLE fts_lookup_oracle
+  (id INT PRIMARY KEY, payload VARCHAR(32), category INT, has_quasar INT, has_nebula INT);
+INSERT INTO fts_lookup_oracle
+SELECT n, CONCAT('payload-',LPAD(n,4,'0')), MOD(n,7), MOD(n,2)=0, MOD(n,3)=0
+FROM (SELECT a.n+8*b.n+64*c.n+512*d.n AS n
+      FROM fts_lookup_digits a, fts_lookup_digits b,
+           fts_lookup_digits c, fts_lookup_digits d) numbers;
+CREATE TABLE fts_lookup_heap
+  (id INT, payload VARCHAR(32), category INT, content TEXT) ORGANIZATION HEAP;
+CREATE TABLE fts_lookup_index
+  (id INT PRIMARY KEY, payload VARCHAR(32), category INT, content TEXT) ORGANIZATION INDEX;
+INSERT INTO fts_lookup_heap
+SELECT id, payload, category,
+       CONCAT(IF(has_quasar,IF(MOD(id,5)=0,'quasar quasar ','quasar '),''),
+              IF(has_nebula,'nebula ',''),'comet')
+FROM fts_lookup_oracle;
+INSERT INTO fts_lookup_index SELECT * FROM fts_lookup_heap;
+ALTER TABLE fts_lookup_heap ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+ALTER TABLE fts_lookup_index ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+
+--echo heap_full_payload_across_batches
+SELECT
+ (SELECT /*+ INDEX(fts_lookup_heap ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
+  FROM fts_lookup_heap WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+  WHERE has_quasar OR has_nebula) AS same_rows;
+
+--echo heap_additional_payload_filter
+SELECT
+ (SELECT /*+ INDEX(fts_lookup_heap ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
+  FROM fts_lookup_heap WHERE MATCH(content) AGAINST('quasar nebula') AND category=3) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+  WHERE (has_quasar OR has_nebula) AND category=3) AS same_rows;
+
+--echo heap_ordered_limit_offset
+SELECT
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM
+  (SELECT /*+ INDEX(fts_lookup_heap ft) */ id,payload FROM fts_lookup_heap
+   WHERE MATCH(content) AGAINST('quasar nebula') ORDER BY id LIMIT 17 OFFSET 1025) actual) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM
+  (SELECT id,payload FROM fts_lookup_oracle
+   WHERE has_quasar OR has_nebula ORDER BY id LIMIT 17 OFFSET 1025) expected) AS same_rows;
+
+--echo heap_empty_lookup
+SELECT /*+ INDEX(fts_lookup_heap ft) */ COUNT(payload) AS hits
+FROM fts_lookup_heap WHERE MATCH(content) AGAINST('absentword');
+SELECT /*+ INDEX(fts_lookup_heap ft) */ COUNT(payload) AS hits
+FROM fts_lookup_heap WHERE MATCH(content) AGAINST('');
+SELECT /*+ INDEX(fts_lookup_heap ft) */ COUNT(payload) AS hits
+FROM fts_lookup_heap WHERE MATCH(content) AGAINST(NULL);
+
+PREPARE fts_lookup_heap_stmt FROM
+'SELECT (SELECT /*+ INDEX(fts_lookup_heap ft) */ GROUP_CONCAT(CONCAT(id,'':'',payload) ORDER BY id) FROM fts_lookup_heap WHERE MATCH(content) AGAINST(?)) <=> (SELECT GROUP_CONCAT(CONCAT(id,'':'',payload) ORDER BY id) FROM fts_lookup_oracle WHERE (? = 1 AND has_quasar) OR (? = 2 AND has_nebula)) AS same_rows';
+--echo heap_prepared_reexecution
+SET @fts_lookup_query='quasar', @fts_lookup_term=1;
+EXECUTE fts_lookup_heap_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+SET @fts_lookup_query='nebula', @fts_lookup_term=2;
+EXECUTE fts_lookup_heap_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+SET @fts_lookup_query='absentword', @fts_lookup_term=0;
+EXECUTE fts_lookup_heap_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+SET @fts_lookup_query='quasar', @fts_lookup_term=1;
+EXECUTE fts_lookup_heap_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+DEALLOCATE PREPARE fts_lookup_heap_stmt;
+
+# Observable scores must still take the score-preserving lookup path. Different
+# token frequencies and document lengths make the scores nonconstant.
+--echo heap_observable_scores
+SELECT
+ (GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) <=>
+  (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+   WHERE has_quasar OR has_nebula)) AS same_rows,
+ MIN(score)>0 AS positive_scores, COUNT(DISTINCT score)>1 AS varied_scores
+FROM (SELECT /*+ INDEX(fts_lookup_heap ft) */ id,payload,
+             MATCH(content) AGAINST('quasar nebula') AS score
+      FROM fts_lookup_heap WHERE MATCH(content) AGAINST('quasar nebula')) scored;
+
+--echo index_full_payload_across_batches
+SELECT
+ (SELECT /*+ INDEX(fts_lookup_index ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
+  FROM fts_lookup_index WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+  WHERE has_quasar OR has_nebula) AS same_rows;
+
+--echo index_additional_payload_filter
+SELECT
+ (SELECT /*+ INDEX(fts_lookup_index ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
+  FROM fts_lookup_index WHERE MATCH(content) AGAINST('quasar nebula') AND category=3) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+  WHERE (has_quasar OR has_nebula) AND category=3) AS same_rows;
+
+--echo index_ordered_limit_offset
+SELECT
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM
+  (SELECT /*+ INDEX(fts_lookup_index ft) */ id,payload FROM fts_lookup_index
+   WHERE MATCH(content) AGAINST('quasar nebula') ORDER BY id LIMIT 17 OFFSET 1025) actual) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM
+  (SELECT id,payload FROM fts_lookup_oracle
+   WHERE has_quasar OR has_nebula ORDER BY id LIMIT 17 OFFSET 1025) expected) AS same_rows;
+
+--echo index_empty_lookup
+SELECT /*+ INDEX(fts_lookup_index ft) */ COUNT(payload) AS hits
+FROM fts_lookup_index WHERE MATCH(content) AGAINST('absentword');
+SELECT /*+ INDEX(fts_lookup_index ft) */ COUNT(payload) AS hits
+FROM fts_lookup_index WHERE MATCH(content) AGAINST('');
+SELECT /*+ INDEX(fts_lookup_index ft) */ COUNT(payload) AS hits
+FROM fts_lookup_index WHERE MATCH(content) AGAINST(NULL);
+
+PREPARE fts_lookup_index_stmt FROM
+'SELECT (SELECT /*+ INDEX(fts_lookup_index ft) */ GROUP_CONCAT(CONCAT(id,'':'',payload) ORDER BY id) FROM fts_lookup_index WHERE MATCH(content) AGAINST(?)) <=> (SELECT GROUP_CONCAT(CONCAT(id,'':'',payload) ORDER BY id) FROM fts_lookup_oracle WHERE (? = 1 AND has_quasar) OR (? = 2 AND has_nebula)) AS same_rows';
+--echo index_prepared_reexecution
+SET @fts_lookup_query='quasar', @fts_lookup_term=1;
+EXECUTE fts_lookup_index_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+SET @fts_lookup_query='nebula', @fts_lookup_term=2;
+EXECUTE fts_lookup_index_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+SET @fts_lookup_query='absentword', @fts_lookup_term=0;
+EXECUTE fts_lookup_index_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+SET @fts_lookup_query='quasar', @fts_lookup_term=1;
+EXECUTE fts_lookup_index_stmt USING @fts_lookup_query, @fts_lookup_term, @fts_lookup_term;
+DEALLOCATE PREPARE fts_lookup_index_stmt;
+
+# Observable scores must still take the score-preserving lookup path. Different
+# token frequencies and document lengths make the scores nonconstant.
+--echo index_observable_scores
+SELECT
+ (GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) <=>
+  (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+   WHERE has_quasar OR has_nebula)) AS same_rows,
+ MIN(score)>0 AS positive_scores, COUNT(DISTINCT score)>1 AS varied_scores
+FROM (SELECT /*+ INDEX(fts_lookup_index ft) */ id,payload,
+             MATCH(content) AGAINST('quasar nebula') AS score
+      FROM fts_lookup_index WHERE MATCH(content) AGAINST('quasar nebula')) scored;
+
+UPDATE fts_lookup_heap SET content='comet',payload='updated-payload' WHERE id=14;
+UPDATE fts_lookup_index SET content='comet',payload='updated-payload' WHERE id=14;
+UPDATE fts_lookup_oracle SET has_quasar=0,has_nebula=0,payload='updated-payload' WHERE id=14;
+DELETE FROM fts_lookup_heap WHERE id=12;
+DELETE FROM fts_lookup_index WHERE id=12;
+DELETE FROM fts_lookup_oracle WHERE id=12;
+INSERT INTO fts_lookup_heap VALUES (5000,'new-payload',3,'quasar nebula');
+INSERT INTO fts_lookup_index VALUES (5000,'new-payload',3,'quasar nebula');
+INSERT INTO fts_lookup_oracle VALUES (5000,'new-payload',3,1,1);
+
+--echo heap_after_dml
+SELECT
+ (SELECT /*+ INDEX(fts_lookup_heap ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
+  FROM fts_lookup_heap WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+  WHERE has_quasar OR has_nebula) AS same_rows;
+
+--echo index_after_dml
+SELECT
+ (SELECT /*+ INDEX(fts_lookup_index ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
+  FROM fts_lookup_index WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id) FROM fts_lookup_oracle
+  WHERE has_quasar OR has_nebula) AS same_rows;
+
+DROP TABLE fts_lookup_heap,fts_lookup_index,fts_lookup_oracle,fts_lookup_digits;
+SET SESSION group_concat_max_len=@fts_lookup_old_concat_len;
+--enable_query_log
