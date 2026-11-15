@@ -18,6 +18,7 @@
 
 #include "share/text_analysis/ob_token_stream.h"
 #include "share/rc/ob_server_runtime.h"
+#include "lib/charset/ob_charset.h"
 
 namespace oceanbase
 {
@@ -66,7 +67,8 @@ int ObTextTokenizer::open(const ObDatum &document, const ObCharsetInfo *cs)
 ObTextWhitespaceTokenizer::ObTextWhitespaceTokenizer()
   : ObTextTokenizer(),
     curr_token_ptr_(nullptr),
-    trav_pos_(0)
+    trav_pos_(0),
+    utf8mb4_ascii_(false)
 {
 }
 
@@ -74,6 +76,7 @@ void ObTextWhitespaceTokenizer::reset()
 {
   curr_token_ptr_ = nullptr;
   trav_pos_ = 0;
+  utf8mb4_ascii_ = false;
   ObTextTokenizer::reset();
 }
 
@@ -82,6 +85,9 @@ int ObTextWhitespaceTokenizer::inner_open(const ObDatum &document, const ObChars
   int ret = OB_SUCCESS;
   curr_token_ptr_ = nullptr;
   trav_pos_ = 0;
+  // Refresh on every document: a pooled analyzer may change character sets.
+  utf8mb4_ascii_ = common::CHARSET_UTF8MB4 == common::ObCharset::charset_type_by_coll(
+      static_cast<common::ObCollationType>(cs->number));
   return ret;
 }
 
@@ -98,7 +104,8 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
     int64_t token_len = 0;
     // to next non-whitespace pos
     while (OB_SUCC(ret) && found_delimiter()) {
-      const int64_t c_len = ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
+      const int64_t c_len = utf8mb4_ascii_ && static_cast<unsigned char>(doc[trav_pos_]) < 0x80
+          ? 1 : ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
       trav_pos_ += c_len;
       if (trav_pos_ >= doc_len || 0 == c_len) {// if char is invalid, just skip the rest of document
         iter_end_ = true;
@@ -112,7 +119,8 @@ int ObTextWhitespaceTokenizer::get_next(ObDatum &next_token, int64_t &token_freq
 
     // to next whitespace pos
     while (OB_SUCC(ret) && !found_delimiter()) {
-      const int64_t c_len = ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
+      const int64_t c_len = utf8mb4_ascii_ && static_cast<unsigned char>(doc[trav_pos_]) < 0x80
+          ? 1 : ob_mbcharlen_ptr(cs_, doc + trav_pos_, doc + doc_len);
       trav_pos_ += c_len;
       token_len += c_len;
       if (trav_pos_ >= doc_len || 0 == c_len) {

@@ -1,0 +1,52 @@
+# owner: fts
+# tags: fts
+# description: UTF8MB4 ASCII advancement preserves BENG separators, frequency,
+# mixed-byte token boundaries, and reuse across character sets.
+--disable_query_log
+
+--echo ascii_single_token
+SELECT TOKENIZE('Quasar','beng') AS tokens;
+--echo ascii_punctuation
+SELECT TOKENIZE('!Quasar,-QUASAR_Quasar!','beng') AS tokens;
+--echo ascii_control_separators
+SELECT TOKENIZE(CONVERT(CONCAT('Quasar',CHAR(0),'QUASAR',CHAR(9),'quasar',
+                              CHAR(10),'Quasar',CHAR(13),CHAR(127)) USING utf8mb4),'beng') AS tokens;
+--echo ascii_delimiters_only
+SELECT TOKENIZE(CONVERT(CONCAT(' ,;!',CHAR(0),CHAR(9),CHAR(10),CHAR(127)) USING utf8mb4),'beng') AS tokens;
+
+# Equal-length strings produce the same token sequence and frequency metadata.
+# Keep lengths equal so hash-map sizing cannot change output ordering.
+--echo ascii_frequency_metadata
+SELECT CAST(TOKENIZE('quasar,!nebula//quasar','beng','[{"output":"all"}]') AS CHAR) <=>
+       CAST(TOKENIZE('quasar  nebula  quasar','beng','[{"output":"all"}]') AS CHAR) AS same_tokens;
+--echo ascii_control_frequency
+SELECT CAST(TOKENIZE(CONVERT(CONCAT('quasar',CHAR(0),'quasar',CHAR(9),'nebula') USING utf8mb4),
+                     'beng','[{"output":"all"}]') AS CHAR) <=>
+       CAST(TOKENIZE('quasar quasar nebula','beng','[{"output":"all"}]') AS CHAR) AS same_tokens;
+
+--echo mixed_utf8_token
+SELECT TOKENIZE('Quasar中文','beng') AS tokens;
+--echo mixed_utf8_separators
+SELECT CAST(TOKENIZE('中文quasar!nebula中文','beng','[{"output":"all"}]') AS CHAR) <=>
+       CAST(TOKENIZE('中文quasar nebula中文','beng','[{"output":"all"}]') AS CHAR) AS same_tokens;
+--echo multibyte_final_character
+SELECT TOKENIZE('Quasaré','beng') AS tokens;
+--echo trailing_ascii_separator
+SELECT TOKENIZE('Quasar中文!','beng') AS tokens;
+
+# Alternate collations and a non-UTF8 character set on the same SQL connection.
+# Different inputs avoid the existing repeated-TOKENIZE result cache.
+--echo utf8_binary
+SELECT TOKENIZE(_utf8mb4'NEBULA!nebula' COLLATE utf8mb4_bin,'beng') AS tokens;
+--echo binary_charset_fallback
+SELECT TOKENIZE(CAST('pulsar,pulsar' AS BINARY),'beng') AS tokens;
+--echo utf8_after_binary
+SELECT TOKENIZE(_utf8mb4'QUASAR/quasar' COLLATE utf8mb4_general_ci,'beng') AS tokens;
+--echo long_ascii_input
+SELECT TOKENIZE(REPEAT('quasar!',2048),'beng') AS tokens;
+--echo empty_after_long_input
+SELECT TOKENIZE('','beng') AS tokens;
+--echo short_after_empty_input
+SELECT TOKENIZE('nebula','beng') AS tokens;
+
+--enable_query_log
