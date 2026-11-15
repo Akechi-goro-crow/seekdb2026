@@ -90,6 +90,16 @@ FROM (SELECT /*+ INDEX(fts_lookup_heap ft) */ id,payload,
              MATCH(content) AGAINST('quasar nebula') AS score
       FROM fts_lookup_heap WHERE MATCH(content) AGAINST('quasar nebula')) scored;
 
+# Identical content recurs in separate batches. Its score must stay attached to
+# that content; positivity and a varied global score set cannot detect swaps.
+--echo heap_score_content_alignment
+SELECT COUNT(*)=5 AS all_classes, MIN(min_score=max_score) AS stable_scores
+FROM (SELECT content, MIN(score) AS min_score, MAX(score) AS max_score
+      FROM (SELECT /*+ INDEX(fts_lookup_heap ft) */ content,
+                   MATCH(content) AGAINST('quasar nebula') AS score
+            FROM fts_lookup_heap WHERE MATCH(content) AGAINST('quasar nebula')) scored
+      GROUP BY content) score_classes;
+
 --echo index_full_payload_across_batches
 SELECT
  (SELECT /*+ INDEX(fts_lookup_index ft) */ GROUP_CONCAT(CONCAT(id,':',payload) ORDER BY id)
@@ -145,6 +155,14 @@ SELECT
 FROM (SELECT /*+ INDEX(fts_lookup_index ft) */ id,payload,
              MATCH(content) AGAINST('quasar nebula') AS score
       FROM fts_lookup_index WHERE MATCH(content) AGAINST('quasar nebula')) scored;
+
+--echo index_score_content_alignment
+SELECT COUNT(*)=5 AS all_classes, MIN(min_score=max_score) AS stable_scores
+FROM (SELECT content, MIN(score) AS min_score, MAX(score) AS max_score
+      FROM (SELECT /*+ INDEX(fts_lookup_index ft) */ content,
+                   MATCH(content) AGAINST('quasar nebula') AS score
+            FROM fts_lookup_index WHERE MATCH(content) AGAINST('quasar nebula')) scored
+      GROUP BY content) score_classes;
 
 UPDATE fts_lookup_heap SET content='comet',payload='updated-payload' WHERE id=14;
 UPDATE fts_lookup_index SET content='comet',payload='updated-payload' WHERE id=14;

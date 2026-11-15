@@ -468,7 +468,43 @@ int ObSRDaaTIterImpl::project_results(const int64_t count)
   ObEvalCtx *eval_ctx = iter_param_->eval_ctx_;
   ObEvalCtx::BatchInfoScopeGuard guard(*eval_ctx);
 
-  if (eval_ctx->is_vectorized()) {
+  if (eval_ctx->is_vectorized() && id_proj_expr->is_batch_result()
+      && (!iter_param_->need_project_relevance() || relevance_proj_expr->is_batch_result())) {
+    // Publish only after all input refills have finished. The buffered IDs
+    // still own the output bytes; only expression-frame setup and flag writes
+    // are batched here. Scalar expressions in a vectorized context retain the
+    // masked-index path below.
+    if (count > 0) {
+      if (value_id_fast_) {
+        ObDatum *id_datums = id_proj_expr->locate_datums_for_update(*eval_ctx, count);
+        for (int64_t i = 0; i < count; ++i) {
+          id_datums[i].set_int(buffered_integer_ids_[i]);
+        }
+      } else if (set_datum_func_ == ObISparseRetrievalMergeIter::set_datum_shallow) {
+        // Shallow assignment replaces ptr_ as well as datum metadata, so the
+        // reserved expression buffer need not be initialized first.
+        ObDatum *id_datums = id_proj_expr->locate_batch_datums(*eval_ctx);
+        for (int64_t i = 0; i < count; ++i) {
+          ObISparseRetrievalMergeIter::set_datum_shallow(id_datums[i], buffered_domain_ids_[i]);
+        }
+      } else {
+        ObDatum *id_datums = id_proj_expr->locate_datums_for_update(*eval_ctx, count);
+        for (int64_t i = 0; i < count; ++i) {
+          set_datum_func_(id_datums[i], buffered_domain_ids_[i]);
+        }
+      }
+      id_proj_expr->get_evaluated_flags(*eval_ctx).set_all(count);
+      id_proj_expr->set_evaluated_projected(*eval_ctx);
+      if (iter_param_->need_project_relevance()) {
+        ObDatum *relevance_datums = relevance_proj_expr->locate_datums_for_update(*eval_ctx, count);
+        for (int64_t i = 0; i < count; ++i) {
+          relevance_datums[i].set_double(buffered_relevances_[i]);
+        }
+        relevance_proj_expr->get_evaluated_flags(*eval_ctx).set_all(count);
+        relevance_proj_expr->set_evaluated_projected(*eval_ctx);
+      }
+    }
+  } else if (eval_ctx->is_vectorized()) {
     sql::ObBitVector &id_evaluated_flags = id_proj_expr->get_evaluated_flags(*eval_ctx);
     for (int64_t i = 0; i < count; ++i) {
       guard.set_batch_idx(i);
