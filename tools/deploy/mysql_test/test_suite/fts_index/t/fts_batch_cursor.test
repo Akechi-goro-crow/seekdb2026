@@ -1,0 +1,186 @@
+# owner: fts
+# tags: fts
+# description: Buffered posting cursors preserve complete results at refill and
+# exhaustion boundaries. Heap and index tables exercise integer and generated
+# binary document IDs; the separate table without FTS supplies the oracle.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_batch_cursor_heap;
+DROP TABLE IF EXISTS fts_batch_cursor_index;
+DROP TABLE IF EXISTS fts_batch_cursor_oracle;
+DROP TABLE IF EXISTS fts_batch_cursor_digits;
+--enable_warnings
+SET @fts_batch_cursor_old_concat_len=@@group_concat_max_len;
+SET SESSION group_concat_max_len=1000000;
+CREATE TABLE fts_batch_cursor_digits (n INT PRIMARY KEY);
+INSERT INTO fts_batch_cursor_digits VALUES (0),(1),(2),(3),(4),(5),(6),(7);
+CREATE TABLE fts_batch_cursor_oracle (id INT PRIMARY KEY, content TEXT);
+INSERT INTO fts_batch_cursor_oracle
+SELECT n, CONCAT(IF(MOD(n,2)=0,'quasar ',''),
+                 IF(MOD(n,3)=0,'nebula ',''),
+                 IF(n=0,'sirius ',''),
+                 IF(n=4095,'rigel ',''),'comet')
+FROM (SELECT a.n+8*b.n+64*c.n+512*d.n AS n
+      FROM fts_batch_cursor_digits a, fts_batch_cursor_digits b,
+           fts_batch_cursor_digits c, fts_batch_cursor_digits d) numbers;
+CREATE TABLE fts_batch_cursor_heap (id INT, content TEXT) ORGANIZATION HEAP;
+CREATE TABLE fts_batch_cursor_index (id INT PRIMARY KEY, content TEXT) ORGANIZATION INDEX;
+INSERT INTO fts_batch_cursor_heap SELECT * FROM fts_batch_cursor_oracle;
+INSERT INTO fts_batch_cursor_index SELECT * FROM fts_batch_cursor_oracle;
+ALTER TABLE fts_batch_cursor_heap ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+ALTER TABLE fts_batch_cursor_index ADD FULLTEXT INDEX ft(content) WITH PARSER beng;
+
+# Lists have 4096, 2048, 1366, 1 and 0 rows. Complete ordered strings expose
+# duplicated, omitted or overwritten IDs even if the final counts still agree.
+--echo heap_full_posting_across_batches
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('comet')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE 1=1) AS same_ids;
+--echo heap_half_posting_across_batches
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('quasar')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE MOD(id,2)=0) AS same_ids;
+--echo heap_unequal_overlapping_postings
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE MOD(id,2)=0 OR MOD(id,3)=0) AS same_ids;
+--echo heap_three_unequal_postings
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('comet quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE 1=1) AS same_ids;
+--echo heap_first_single_row
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('sirius')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE id=0) AS same_ids;
+--echo heap_last_single_row
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('rigel')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE id=4095) AS same_ids;
+--echo heap_single_rows_with_long_posting
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('sirius quasar rigel')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE id=0 OR MOD(id,2)=0 OR id=4095) AS same_ids;
+--echo heap_empty_list_with_long_posting
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('absentword nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE MOD(id,3)=0) AS same_ids;
+--echo heap_empty_postings
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap
+  WHERE MATCH(content) AGAINST('absentword nonexistentword')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE 1=0) AS same_ids;
+
+# Reopen the same plan with long, singleton, empty and uneven posting lists,
+# then revisit the first query to catch stale cursor state after exhaustion.
+PREPARE fts_batch_cursor_heap_stmt FROM
+'SELECT (SELECT /*+ INDEX(fts_batch_cursor_heap ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_heap WHERE MATCH(content) AGAINST(?)) <=> (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle WHERE content LIKE ?) AS same_ids';
+--echo heap_prepared_reuse
+SET @fts_batch_cursor_query='quasar', @fts_batch_cursor_pattern='%quasar%';
+EXECUTE fts_batch_cursor_heap_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='rigel', @fts_batch_cursor_pattern='%rigel%';
+EXECUTE fts_batch_cursor_heap_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='absentword', @fts_batch_cursor_pattern='%absentword%';
+EXECUTE fts_batch_cursor_heap_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='nebula', @fts_batch_cursor_pattern='%nebula%';
+EXECUTE fts_batch_cursor_heap_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='comet', @fts_batch_cursor_pattern='%comet%';
+EXECUTE fts_batch_cursor_heap_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='quasar', @fts_batch_cursor_pattern='%quasar%';
+EXECUTE fts_batch_cursor_heap_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+DEALLOCATE PREPARE fts_batch_cursor_heap_stmt;
+
+--echo index_full_posting_across_batches
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('comet')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE 1=1) AS same_ids;
+--echo index_half_posting_across_batches
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('quasar')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE MOD(id,2)=0) AS same_ids;
+--echo index_unequal_overlapping_postings
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE MOD(id,2)=0 OR MOD(id,3)=0) AS same_ids;
+--echo index_three_unequal_postings
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('comet quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE 1=1) AS same_ids;
+--echo index_first_single_row
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('sirius')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE id=0) AS same_ids;
+--echo index_last_single_row
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('rigel')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE id=4095) AS same_ids;
+--echo index_single_rows_with_long_posting
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('sirius quasar rigel')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE id=0 OR MOD(id,2)=0 OR id=4095) AS same_ids;
+--echo index_empty_list_with_long_posting
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('absentword nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE MOD(id,3)=0) AS same_ids;
+--echo index_empty_postings
+SELECT
+ (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index
+  WHERE MATCH(content) AGAINST('absentword nonexistentword')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle
+  WHERE 1=0) AS same_ids;
+
+# Reopen the same plan with long, singleton, empty and uneven posting lists,
+# then revisit the first query to catch stale cursor state after exhaustion.
+PREPARE fts_batch_cursor_index_stmt FROM
+'SELECT (SELECT /*+ INDEX(fts_batch_cursor_index ft) */ GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_index WHERE MATCH(content) AGAINST(?)) <=> (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_batch_cursor_oracle WHERE content LIKE ?) AS same_ids';
+--echo index_prepared_reuse
+SET @fts_batch_cursor_query='quasar', @fts_batch_cursor_pattern='%quasar%';
+EXECUTE fts_batch_cursor_index_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='rigel', @fts_batch_cursor_pattern='%rigel%';
+EXECUTE fts_batch_cursor_index_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='absentword', @fts_batch_cursor_pattern='%absentword%';
+EXECUTE fts_batch_cursor_index_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='nebula', @fts_batch_cursor_pattern='%nebula%';
+EXECUTE fts_batch_cursor_index_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='comet', @fts_batch_cursor_pattern='%comet%';
+EXECUTE fts_batch_cursor_index_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+SET @fts_batch_cursor_query='quasar', @fts_batch_cursor_pattern='%quasar%';
+EXECUTE fts_batch_cursor_index_stmt USING @fts_batch_cursor_query, @fts_batch_cursor_pattern;
+DEALLOCATE PREPARE fts_batch_cursor_index_stmt;
+
+DROP TABLE fts_batch_cursor_heap, fts_batch_cursor_index,
+           fts_batch_cursor_oracle, fts_batch_cursor_digits;
+SET SESSION group_concat_max_len=@fts_batch_cursor_old_concat_len;
+--enable_query_log

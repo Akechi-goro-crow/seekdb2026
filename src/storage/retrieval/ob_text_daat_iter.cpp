@@ -109,12 +109,11 @@ int ObTextDaaTIter::do_one_merge_round(int64_t &count)
           static_cast<ObTextRetrievalDaaTTokenIter *>(dim_iter_ptr_cache_[iter_idx]);
       if (OB_ISNULL(token_iter)) {
         ret = OB_ERR_UNEXPECTED;
-      } else if (OB_FAIL(token_iter->get_next_row())) {
+      } else if (OB_FAIL(token_iter->get_next_doc_id(iter_domain_ids_[iter_idx]))) {
         if (OB_ITER_END == ret) {
           iter_domain_ids_[iter_idx] = nullptr;
           ret = OB_SUCCESS;
         }
-      } else if (OB_FAIL(token_iter->get_curr_id(iter_domain_ids_[iter_idx]))) {
       }
     }
 
