@@ -26,6 +26,9 @@ same_rows
 heap_observable_scores
 same_rows	positive_scores	varied_scores
 1	1	1
+heap_score_content_alignment
+all_classes	stable_scores
+1	1
 index_full_payload_across_batches
 same_rows
 1
@@ -54,6 +57,9 @@ same_rows
 index_observable_scores
 same_rows	positive_scores	varied_scores
 1	1	1
+index_score_content_alignment
+all_classes	stable_scores
+1	1
 heap_after_dml
 same_rows
 1
