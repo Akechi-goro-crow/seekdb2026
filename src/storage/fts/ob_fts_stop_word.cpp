@@ -27,6 +27,20 @@ namespace oceanbase
 namespace storage
 {
 
+namespace
+{
+bool is_ascii_alphanumeric(const ObString &text)
+{
+  bool result = true;
+  for (int64_t i = 0; result && i < text.length(); ++i) {
+    const unsigned char ch = static_cast<unsigned char>(text.ptr()[i]);
+    result = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z')
+        || (ch >= '0' && ch <= '9');
+  }
+  return result;
+}
+} // anonymous namespace
+
 ////////////////////////////////////////////////////////////////////////////////
 // class ObStopWordChecker
 ObStopWordChecker::~ObStopWordChecker()
@@ -50,13 +64,17 @@ int ObStopWordChecker::init()
 
     stopword_type_.set_meta(stop_meta);
     const int64_t stopword_count = sizeof(ob_stop_word_list) / sizeof(ob_stop_word_list[0]);
+    int64_t max_stopword_length = 0;
     for (int64_t i = 0; OB_SUCC(ret) && i < stopword_count; ++i) {
-      ObFTWord stopword(STRLEN(ob_stop_word_list[i]), ob_stop_word_list[i], stopword_type_);
+      const int64_t word_length = STRLEN(ob_stop_word_list[i]);
+      max_stopword_length = OB_MAX(max_stopword_length, word_length);
+      ObFTWord stopword(word_length, ob_stop_word_list[i], stopword_type_);
       if (OB_FAIL(stopword_set_.set_refactored(stopword))) {
       }
     }
 
     if (OB_SUCC(ret)) {
+      max_stopword_length_ = max_stopword_length;
       inited_ = true;
     }
   }
@@ -67,6 +85,7 @@ void ObStopWordChecker::destroy()
 {
   if (inited_) {
     stopword_set_.destroy();
+    max_stopword_length_ = 0;
     inited_ = false;
   }
 }
@@ -87,19 +106,24 @@ int ObStopWordChecker::check_stopword(const ObFTWord &word, bool &is_stopword)
     // collation yields exactly the same hash and comparison result as the
     // converted word. This keeps the per-token check allocation free while
     // preserving the case-insensitive semantics of the GENERAL_CI lookup.
-    ObFTWord converted(word.get_word().get_string().length(),
-                       word.get_word().get_string().ptr(),
-                       stopword_type_);
-    ret = stopword_set_.exist_refactored(converted);
-    if (OB_HASH_NOT_EXIST == ret) {
+    const ObString text = word.get_word().get_string();
+    // GENERAL_CI cannot shorten an ASCII alphanumeric word. Check every byte:
+    // trailing spaces and non-ASCII collation equivalents need the full lookup.
+    if (text.length() > max_stopword_length_ && is_ascii_alphanumeric(text)) {
       is_stopword = false;
-      ret = OB_SUCCESS;
-    } else if (OB_HASH_EXIST == ret) {
-      is_stopword = true;
-      ret = OB_SUCCESS;
-    } else if (OB_SUCC(ret)) {
-      ret = OB_ERR_UNEXPECTED;
     } else {
+      ObFTWord converted(text.length(), text.ptr(), stopword_type_);
+      ret = stopword_set_.exist_refactored(converted);
+      if (OB_HASH_NOT_EXIST == ret) {
+        is_stopword = false;
+        ret = OB_SUCCESS;
+      } else if (OB_HASH_EXIST == ret) {
+        is_stopword = true;
+        ret = OB_SUCCESS;
+      } else if (OB_SUCC(ret)) {
+        ret = OB_ERR_UNEXPECTED;
+      } else {
+      }
     }
   } else {
     common::ObArenaAllocator allocator(lib::ObMemAttr("ChkStopWord"));

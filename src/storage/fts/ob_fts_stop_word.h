@@ -82,10 +82,14 @@ public:
 
 private:
   static const int64_t DEFAULT_STOPWORD_BUCKET_NUM = 37L;
-  typedef common::hash::ObHashSet<storage::ObFTWord> StopWordSet;
+  // Filled before the FTS service starts and destroyed after its readers stop.
+  // check_stopword() only reads this private, immutable set.
+  typedef common::hash::ObHashSet<storage::ObFTWord,
+                                 common::hash::NoPthreadDefendMode> StopWordSet;
 
   StopWordSet stopword_set_;
   ObObjMeta stopword_type_;
+  int64_t max_stopword_length_ = 0;
 
   bool inited_ = false;
 

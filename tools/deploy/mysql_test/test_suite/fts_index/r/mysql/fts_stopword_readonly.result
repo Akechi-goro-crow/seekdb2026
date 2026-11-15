@@ -1,0 +1,52 @@
+beng_complete_token_sets
+id	same_tokens
+1	1
+2	1
+3	1
+4	1
+5	1
+6	1
+7	1
+8	1
+9	1
+10	1
+11	1
+12	1
+13	1
+14	1
+15	1
+space_complete_token_sets
+id	same_tokens
+1	1
+2	1
+3	1
+4	1
+5	1
+6	1
+7	1
+8	1
+9	1
+10	1
+11	1
+12	1
+13	1
+14	1
+15	1
+charset_conversion_and_repeated_counts
+same_tokens
+1
+same_tokens
+1
+same_frequency
+1
+same_frequency
+1
+prepared_input_changes
+same_tokens
+1
+same_tokens
+1
+same_tokens
+1
+same_tokens
+1

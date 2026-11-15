@@ -1,0 +1,73 @@
+# owner: fts
+# tags: fts
+# description: Stopword lookup preserves token bytes, case/collation semantics,
+# charset conversion and repeated use for both BENG and space parsers.
+# Column inputs also exercise uncached tokenization; compare complete token sets.
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_stopword_cases;
+--enable_warnings
+CREATE TABLE fts_stopword_cases (
+  id INT PRIMARY KEY,
+  input_text VARCHAR(1000) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin,
+  expected TEXT CHARACTER SET utf8mb4 COLLATE utf8mb4_bin
+);
+INSERT INTO fts_stopword_cases VALUES
+(1,'a about an are as at be by com de en for from how i in is it la of on or that the this to was what when where who will with und www','[]'),
+(2,'ABOUT About aBoUt WHERE Where THE tHe','[]'),
+(3,'about where','[]'),
+(4,'abouts wheres','["abouts","wheres"]'),
+(5,'alpha','["alpha"]'),
+(6,'ABC123 abc123','["abc123"]'),
+(7,'Database DATABASE database','["database"]'),
+(8,'database searchengine abc123','["database","searchengine","abc123"]'),
+(9,'àbòùt','[]'),
+(10,'ＴＨＥ ｔｈｅ','["ｔｈｅ"]'),
+(11,'数据库','["数据库"]'),
+(12,'  about   ','[]'),
+(13,'','[]'),
+(14,REPEAT('a',84),CONCAT('["',REPEAT('a',84),'"]')),
+(15,REPEAT('a',85),'[]');
+
+--echo beng_complete_token_sets
+SELECT id,
+       JSON_LENGTH(actual)=JSON_LENGTH(expected)
+       AND JSON_CONTAINS(actual,expected) AS same_tokens
+FROM (SELECT id,expected,
+             TOKENIZE(input_text,'beng','[{"additional_args":[{"min_token_size":1}]}]') AS actual
+      FROM fts_stopword_cases) tokens ORDER BY id;
+
+--echo space_complete_token_sets
+SELECT id,
+       JSON_LENGTH(actual)=JSON_LENGTH(expected)
+       AND JSON_CONTAINS(actual,expected) AS same_tokens
+FROM (SELECT id,expected,
+             TOKENIZE(input_text,'space','[{"additional_args":[{"min_token_size":1}]}]') AS actual
+      FROM fts_stopword_cases) tokens ORDER BY id;
+
+# latin1 forces the original conversion path; utf8mb4_bin input still checks
+# stopwords using GENERAL_CI, including accented equivalents longer than 5 bytes.
+--echo charset_conversion_and_repeated_counts
+SELECT JSON_LENGTH(TOKENIZE(_latin1'ABOUT about database','beng'))=1
+       AND JSON_CONTAINS(TOKENIZE(_latin1'ABOUT about database','beng'),'"database"') AS same_tokens;
+SELECT JSON_LENGTH(TOKENIZE(_latin1'ABOUT about database','space'))=1
+       AND JSON_CONTAINS(TOKENIZE(_latin1'ABOUT about database','space'),'"database"') AS same_tokens;
+SELECT JSON_EXTRACT(TOKENIZE('database DATABASE about','beng','[{"output":"all"}]'),'$.doc_len')=2
+       AND JSON_EXTRACT(TOKENIZE('database DATABASE about','beng','[{"output":"all"}]'),'$.tokens[0].database')=2 AS same_frequency;
+SELECT JSON_EXTRACT(TOKENIZE('database DATABASE about','space','[{"output":"all"}]'),'$.doc_len')=2
+       AND JSON_EXTRACT(TOKENIZE('database DATABASE about','space','[{"output":"all"}]'),'$.tokens[0].database')=2 AS same_frequency;
+
+--echo prepared_input_changes
+PREPARE fts_stopword_stmt FROM
+'SELECT JSON_LENGTH(TOKENIZE(?,''beng''))=JSON_LENGTH(?) AND JSON_CONTAINS(TOKENIZE(?,''beng''),?) AS same_tokens';
+SET @word='database', @expected='["database"]';
+EXECUTE fts_stopword_stmt USING @word,@expected,@word,@expected;
+SET @word='about', @expected='[]';
+EXECUTE fts_stopword_stmt USING @word,@expected,@word,@expected;
+SET @word='àbòùt', @expected='[]';
+EXECUTE fts_stopword_stmt USING @word,@expected,@word,@expected;
+SET @word='database', @expected='["database"]';
+EXECUTE fts_stopword_stmt USING @word,@expected,@word,@expected;
+DEALLOCATE PREPARE fts_stopword_stmt;
+DROP TABLE fts_stopword_cases;
+--enable_query_log
