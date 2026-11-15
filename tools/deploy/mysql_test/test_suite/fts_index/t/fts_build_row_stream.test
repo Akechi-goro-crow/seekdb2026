@@ -10,6 +10,8 @@ DROP TABLE IF EXISTS fts_stream_bulk;
 DROP TABLE IF EXISTS fts_stream_dml;
 DROP TABLE IF EXISTS fts_stream_ik_bulk;
 DROP TABLE IF EXISTS fts_stream_ik_dml;
+DROP TABLE IF EXISTS fts_stream_heap_bulk;
+DROP TABLE IF EXISTS fts_stream_heap_dml;
 --enable_warnings
 
 CREATE TABLE fts_stream_bulk (id BIGINT PRIMARY KEY, title VARCHAR(128), body TEXT);
@@ -88,5 +90,70 @@ FROM (SELECT id, MATCH(body) AGAINST('数据库 全文') AS score
 JOIN (SELECT id, MATCH(body) AGAINST('数据库 全文') AS score
       FROM fts_stream_ik_dml WHERE MATCH(body) AGAINST('数据库 全文')) b ON a.id=b.id;
 
-DROP TABLE fts_stream_bulk, fts_stream_dml, fts_stream_ik_bulk, fts_stream_ik_dml;
+# Heap document IDs and independently built indexes exercise separate scan specs.
+# Compare complete ID sets as well as scores: an inner join alone could hide
+# missing rows. The DML table maintains its indexes before any data is loaded.
+CREATE TABLE fts_stream_heap_bulk
+  (id INT, title VARCHAR(128), body TEXT) ORGANIZATION HEAP;
+CREATE TABLE fts_stream_heap_dml
+  (id INT, title VARCHAR(128), body TEXT) ORGANIZATION HEAP;
+INSERT INTO fts_stream_heap_bulk VALUES
+(1,'quasar','quasar quasar nebula'),(2,'',''),(3,NULL,NULL),
+(4,'nebula','quasar nebula nebula'),(5,'quasar','comet'),
+(6,'',REPEAT('quasar nebula ',2000)),(7,NULL,'nebula'),
+(8,'comet','asteroid'),(9,'quasar','');
+ALTER TABLE fts_stream_heap_dml ADD FULLTEXT INDEX ft_all(title,body) WITH PARSER beng;
+ALTER TABLE fts_stream_heap_dml ADD FULLTEXT INDEX ft_body(body) WITH PARSER beng;
+INSERT INTO fts_stream_heap_dml SELECT * FROM fts_stream_heap_bulk;
+ALTER TABLE fts_stream_heap_bulk ADD FULLTEXT INDEX ft_all(title,body) WITH PARSER beng;
+ALTER TABLE fts_stream_heap_bulk ADD FULLTEXT INDEX ft_body(body) WITH PARSER beng;
+
+--echo heap_multicol_complete_ids
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_heap_bulk
+  WHERE MATCH(title,body) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_heap_dml
+  WHERE MATCH(title,body) AGAINST('quasar nebula')) AS same_ids;
+--echo heap_multicol_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_heap_bulk WHERE MATCH(title,body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_heap_dml WHERE MATCH(title,body) AGAINST('quasar nebula')) b ON a.id=b.id;
+
+--echo heap_body_complete_ids
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_heap_bulk
+  WHERE MATCH(body) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_heap_dml
+  WHERE MATCH(body) AGAINST('quasar nebula')) AS same_ids;
+--echo heap_body_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_heap_bulk WHERE MATCH(body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_heap_dml WHERE MATCH(body) AGAINST('quasar nebula')) b ON a.id=b.id;
+
+# Change membership and frequency before rebuilding only the body index.
+UPDATE fts_stream_heap_bulk SET body='comet' WHERE id=4;
+UPDATE fts_stream_heap_dml SET body='comet' WHERE id=4;
+UPDATE fts_stream_heap_bulk SET body='nebula nebula' WHERE id=5;
+UPDATE fts_stream_heap_dml SET body='nebula nebula' WHERE id=5;
+ALTER TABLE fts_stream_heap_bulk DROP INDEX ft_body;
+ALTER TABLE fts_stream_heap_bulk ADD FULLTEXT INDEX ft_body(body) WITH PARSER beng;
+--echo rebuilt_heap_body_complete_ids
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_heap_bulk
+  WHERE MATCH(body) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_heap_dml
+  WHERE MATCH(body) AGAINST('quasar nebula')) AS same_ids;
+--echo rebuilt_heap_body_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_heap_bulk WHERE MATCH(body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_heap_dml WHERE MATCH(body) AGAINST('quasar nebula')) b ON a.id=b.id;
+
+DROP TABLE fts_stream_bulk, fts_stream_dml, fts_stream_ik_bulk, fts_stream_ik_dml,
+           fts_stream_heap_bulk, fts_stream_heap_dml;
 --enable_query_log

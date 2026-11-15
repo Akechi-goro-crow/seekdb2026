@@ -53,3 +53,21 @@ hits	same_scores
 ik_chinese_scores
 hits	same_scores
 4	1
+heap_multicol_complete_ids
+same_ids
+1
+heap_multicol_scores
+hits	same_scores
+6	1
+heap_body_complete_ids
+same_ids
+1
+heap_body_scores
+hits	same_scores
+4	1
+rebuilt_heap_body_complete_ids
+same_ids
+1
+rebuilt_heap_body_scores
+hits	same_scores
+4	1
