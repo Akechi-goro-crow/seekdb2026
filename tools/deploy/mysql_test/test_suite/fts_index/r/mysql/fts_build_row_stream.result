@@ -71,3 +71,17 @@ same_ids
 rebuilt_heap_body_scores
 hits	same_scores
 4	1
+combined_bulk_complete_ids
+same_ids
+1
+combined_dml_complete_ids
+same_ids
+1
+combined_bulk_dml_scores
+hits	same_scores
+2731	1
+combined_stopwords_only
+hits
+0
+hits
+0

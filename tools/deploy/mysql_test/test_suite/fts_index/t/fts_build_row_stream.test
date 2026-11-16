@@ -12,6 +12,9 @@ DROP TABLE IF EXISTS fts_stream_ik_bulk;
 DROP TABLE IF EXISTS fts_stream_ik_dml;
 DROP TABLE IF EXISTS fts_stream_heap_bulk;
 DROP TABLE IF EXISTS fts_stream_heap_dml;
+DROP TABLE IF EXISTS fts_stream_combined_bulk;
+DROP TABLE IF EXISTS fts_stream_combined_dml;
+DROP TABLE IF EXISTS fts_stream_digits;
 --enable_warnings
 
 CREATE TABLE fts_stream_bulk (id BIGINT PRIMARY KEY, title VARCHAR(128), body TEXT);
@@ -154,6 +157,54 @@ FROM (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
 JOIN (SELECT id, MATCH(body) AGAINST('quasar nebula') AS score
       FROM fts_stream_heap_dml WHERE MATCH(body) AGAINST('quasar nebula')) b ON a.id=b.id;
 
+# Combine cached DDL projections, stopword filtering and multi-batch retrieval.
+# An arithmetic ID oracle catches shared DDL/DML omissions; observable scores
+# catch wrong frequencies or document lengths after the optimizations combine.
+SET @fts_stream_old_concat_len=@@group_concat_max_len;
+SET SESSION group_concat_max_len=1000000;
+CREATE TABLE fts_stream_digits (n INT PRIMARY KEY);
+INSERT INTO fts_stream_digits VALUES (0),(1),(2),(3),(4),(5),(6),(7);
+CREATE TABLE fts_stream_combined_bulk
+  (id INT, title VARCHAR(128), body TEXT) ORGANIZATION HEAP;
+CREATE TABLE fts_stream_combined_dml
+  (id INT, title VARCHAR(128), body TEXT) ORGANIZATION HEAP;
+INSERT INTO fts_stream_combined_bulk
+SELECT n, 'about THE àbòùt',
+       CONCAT(IF(MOD(n,2)=0,IF(MOD(n,5)=0,'quasar quasar ','quasar '),''),
+              IF(MOD(n,3)=0,'nebula ',''),'comet where')
+FROM (SELECT a.n+8*b.n+64*c.n+512*d.n AS n
+      FROM fts_stream_digits a, fts_stream_digits b,
+           fts_stream_digits c, fts_stream_digits d) numbers;
+ALTER TABLE fts_stream_combined_dml ADD FULLTEXT INDEX ft(title,body) WITH PARSER beng;
+INSERT INTO fts_stream_combined_dml SELECT * FROM fts_stream_combined_bulk;
+ALTER TABLE fts_stream_combined_bulk ADD FULLTEXT INDEX ft(title,body) WITH PARSER beng;
+
+--echo combined_bulk_complete_ids
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_combined_bulk
+  WHERE MATCH(title,body) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_combined_bulk
+  WHERE MOD(id,2)=0 OR MOD(id,3)=0) AS same_ids;
+--echo combined_dml_complete_ids
+SELECT
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_combined_dml
+  WHERE MATCH(title,body) AGAINST('quasar nebula')) <=>
+ (SELECT GROUP_CONCAT(id ORDER BY id) FROM fts_stream_combined_dml
+  WHERE MOD(id,2)=0 OR MOD(id,3)=0) AS same_ids;
+--echo combined_bulk_dml_scores
+SELECT COUNT(*) AS hits, MAX(ABS(a.score-b.score)) < 0.000000000001 AS same_scores
+FROM (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_combined_bulk WHERE MATCH(title,body) AGAINST('quasar nebula')) a
+JOIN (SELECT id, MATCH(title,body) AGAINST('quasar nebula') AS score
+      FROM fts_stream_combined_dml WHERE MATCH(title,body) AGAINST('quasar nebula')) b ON a.id=b.id;
+--echo combined_stopwords_only
+SELECT COUNT(*) AS hits FROM fts_stream_combined_bulk
+WHERE MATCH(title,body) AGAINST('about THE àbòùt where');
+SELECT COUNT(*) AS hits FROM fts_stream_combined_dml
+WHERE MATCH(title,body) AGAINST('about THE àbòùt where');
+
 DROP TABLE fts_stream_bulk, fts_stream_dml, fts_stream_ik_bulk, fts_stream_ik_dml,
-           fts_stream_heap_bulk, fts_stream_heap_dml;
+           fts_stream_heap_bulk, fts_stream_heap_dml,
+           fts_stream_combined_bulk, fts_stream_combined_dml, fts_stream_digits;
+SET SESSION group_concat_max_len=@fts_stream_old_concat_len;
 --enable_query_log
