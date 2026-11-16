@@ -372,9 +372,13 @@ int ObFtsIndexBuildTask::get_next_status(share::ObDDLTaskStatus &next_status)
         bool need_to_load_dic = false;
         const ObString &parser_name = create_index_arg_.index_option_.parser_name_;
         if (is_fts_task() && OB_FAIL(ObFtsIndexBuilderUtil::check_need_to_load_dic(parser_name, need_to_load_dic))) {
-        } else if (need_to_load_dic) {
-          next_status = ObDDLTaskStatus::LOAD_DICTIONARY;
         } else {
+          // Built-in IK dictionaries are materialized from ObIKDictLoader by
+          // ObFTDictHub. ObDicLoader::check_need_load_dic() no longer loads SQL
+          // dictionary tables, so a separate LOAD_DICTIONARY transaction only
+          // persists an intermediate state. Keep the handler for tasks already
+          // in that state; dictionary locks and charset validation still run
+          // in prepare_aux_index_tables().
           next_status = ObDDLTaskStatus::GENERATE_DOC_AUX_SCHEMA;
         }
         break;
