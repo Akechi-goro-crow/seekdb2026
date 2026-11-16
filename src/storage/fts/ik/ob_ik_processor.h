@@ -63,6 +63,34 @@ public:
   int current_char(const char *&ch, uint8_t &char_len);
   int current_char_type(ObFTCharUtil::CharType &type);
 
+  // prepare_next_char() has already validated and decoded this character.
+  // Preserve the helpers' UTF8-only contract while sharing that decode with
+  // the number and connector processors.
+  int check_current_cn_number(bool &is_number) const
+  {
+    if (CHARSET_UTF8MB4 != cs_type_) {
+      return OB_NOT_SUPPORTED;
+    }
+    is_number = ObUnicodeBlockUtils::is_unicode_cn_number(next_unicode_);
+    return OB_SUCCESS;
+  }
+  int check_current_num_connector(bool &is_connector) const
+  {
+    if (CHARSET_UTF8MB4 != cs_type_) {
+      return OB_NOT_SUPPORTED;
+    }
+    is_connector = ObUnicodeBlockUtils::check_num_connector(next_unicode_);
+    return OB_SUCCESS;
+  }
+  int check_current_letter_connector(bool &is_connector) const
+  {
+    if (CHARSET_UTF8MB4 != cs_type_) {
+      return OB_NOT_SUPPORTED;
+    }
+    is_connector = ObUnicodeBlockUtils::check_letter_connector(next_unicode_);
+    return OB_SUCCESS;
+  }
+
   int step_next();
 
   // Reuse table of per-character (offset, len, type) recorded while the
@@ -124,6 +152,7 @@ private:
   int64_t cursor_;
   int64_t next_char_len_;
   ObFTCharUtil::CharType next_char_type_;
+  ob_wc_t next_unicode_;
 
   // charset resolved once in init() so that the per-character hot path is free
   // of repeated get_charset()/charset_type_by_coll() lookups

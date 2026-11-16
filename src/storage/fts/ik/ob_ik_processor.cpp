@@ -53,6 +53,7 @@ TokenizeContext::TokenizeContext(ObCollationType coll_type,
     : coll_type_(coll_type), fulltext_(fulltext), fulltext_len_(fulltext_len),
       allocator_(allocator), char_infos_(nullptr), char_info_cnt_(0), char_info_cap_(0),
       cursor_(0), next_char_len_(0), next_char_type_(ObFTCharUtil::CharType::USELESS),
+      next_unicode_(0),
       cs_(nullptr), cs_type_(CHARSET_INVALID), handle_size_(0), is_smart_(is_smart),
       token_list_(allocator), result_list_(allocator)
 {
@@ -77,6 +78,7 @@ int TokenizeContext::reinit(ObCollationType coll_type,
   cursor_ = 0;
   next_char_len_ = 0;
   next_char_type_ = ObFTCharUtil::CharType::USELESS;
+  next_unicode_ = 0;
   handle_size_ = 0;
   char_info_cnt_ = 0;
   if (OB_ISNULL(fulltext_) || fulltext_len_ <= 0) {
@@ -117,6 +119,7 @@ void TokenizeContext::release_scratch()
   cursor_ = 0;
   next_char_len_ = 0;
   next_char_type_ = ObFTCharUtil::CharType::USELESS;
+  next_unicode_ = 0;
   handle_size_ = 0;
 }
 
@@ -179,6 +182,8 @@ int TokenizeContext::prepare_next_char()
                     cs_type_, cur, static_cast<uint8_t>(next_char_len_), unicode))) {
     } else if (OB_FAIL(ObFTCharUtil::classify_decoded_by_charset(
                            cs_type_, unicode, next_char_type_))) {
+    } else {
+      next_unicode_ = unicode;
     }
   }
   if (OB_SUCC(ret)) {

@@ -1,0 +1,6 @@
+SELECT COUNT(*) AS decoded_char_fixture_matches FROM fts_ik_decoded_char
+WHERE JSON_LENGTH(TOKENIZE(body, 'ik')) = JSON_LENGTH(expected)
+AND JSON_CONTAINS(TOKENIZE(body, 'ik'), expected)
+AND JSON_CONTAINS(expected, TOKENIZE(body, 'ik'));
+decoded_char_fixture_matches
+8

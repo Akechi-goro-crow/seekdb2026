@@ -1,0 +1,31 @@
+# owner: seekdb-task4
+# owner group: storage
+# tags: fts
+# description: current Unicode reuse for IK number and connector processors.
+
+--disable_query_log
+--disable_warnings
+DROP TABLE IF EXISTS fts_ik_decoded_char;
+--enable_warnings
+CREATE TABLE fts_ik_decoded_char (id INT PRIMARY KEY, body TEXT, expected VARCHAR(512))
+  DEFAULT CHARSET=utf8mb4;
+# Expected arrays are inherited from fts_parser_reuse_regression. Changing
+# table rows exercises the parser beyond TOKENIZE's last-complete-result cache.
+# Compare membership both ways and length, independently of map iteration order.
+INSERT INTO fts_ik_decoded_char VALUES
+  (1, '3-4', '["3-4"]'),
+  (2, '一二三四五六', '["一二三四五六"]'),
+  (3, '56', '["56"]'),
+  (4, '12一二三', '["12一二三"]'),
+  (5, 'x1y2z3', '["x1y2z3"]'),
+  (6, '七', '["七"]'),
+  (7, '45六七八', '["45六七八"]'),
+  (8, 'full-text', '["full-text"]');
+--enable_query_log
+SELECT COUNT(*) AS decoded_char_fixture_matches FROM fts_ik_decoded_char
+WHERE JSON_LENGTH(TOKENIZE(body, 'ik')) = JSON_LENGTH(expected)
+  AND JSON_CONTAINS(TOKENIZE(body, 'ik'), expected)
+  AND JSON_CONTAINS(expected, TOKENIZE(body, 'ik'));
+--disable_query_log
+DROP TABLE fts_ik_decoded_char;
+--enable_query_log
